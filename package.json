@@ -1,0 +1,28 @@
+{
+  "name": "openclaw-sandcastle",
+  "version": "0.1.0",
+  "description": "Lightweight ephemeral bwrap filesystem sandbox for OpenClaw agents. Zero Docker dependency.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["openclaw", "plugin", "sandbox", "bwrap", "bubblewrap", "security"],
+  "files": ["dist", "src", "openclaw.plugin.json", "README.md", "Architecture.md", "docs"],
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+    "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "openclaw": "2026.7.1-2",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  },
+  "openclaw": {
+    "extensions": ["./dist/index.js"]
+  }
+}
