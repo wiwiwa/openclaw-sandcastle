@@ -2,7 +2,7 @@
   "id": "openclaw-sandcastle",
   "name": "Sandcastle",
   "description": "Lightweight ephemeral bwrap filesystem sandbox for OpenClaw agents (secret-path isolation, no Docker).",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "kind": "sandbox",
   "configSchema": {
     "type": "object",
@@ -10,22 +10,35 @@
     "properties": {
       "backend": {
         "type": "string",
-        "enum": ["bwrap"],
+        "enum": [
+          "bwrap"
+        ],
         "description": "Sandbox backend (v1: bwrap only)."
       },
       "mode": {
         "type": "string",
-        "enum": ["off", "non-main", "all"],
+        "enum": [
+          "off",
+          "non-main",
+          "all"
+        ],
         "description": "Which sessions get sandboxed: off, non-main, or all."
       },
       "scope": {
         "type": "string",
-        "enum": ["agent", "session"],
+        "enum": [
+          "agent",
+          "session"
+        ],
         "description": "Sandbox scope. v1 ships agent + session only (Architecture.md §8)."
       },
       "workspaceAccess": {
         "type": "string",
-        "enum": ["none", "ro", "rw"],
+        "enum": [
+          "none",
+          "ro",
+          "rw"
+        ],
         "description": "Workspace mount mode inside the sandbox."
       },
       "bwrap": {
@@ -34,15 +47,21 @@
         "properties": {
           "binds": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Glob bind rules: [prefix]<path>[:mode]. + force-allow, - deny (wins)."
           },
           "env": {
             "type": "object",
             "additionalProperties": {
               "anyOf": [
-                { "type": "boolean" },
-                { "type": "string" }
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string"
+                }
               ]
             },
             "description": "Env schema: true = pass host value, false = strip, string = literal. Unlisted vars are stripped."
