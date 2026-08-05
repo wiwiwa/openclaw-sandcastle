@@ -18,11 +18,14 @@ import type {
 } from "openclaw/plugin-sdk/sandbox";
 import type { SandcastlePluginConfig } from "./config.js";
 import { resolveSandcastleConfig } from "./config.js";
-import { resolveBinds, isPathDenied } from "./bind-rules.js";
+import { resolveBinds, isPathDenied, expandHome } from "./bind-rules.js";
 import { filterEnv } from "./env-filter.js";
 import { buildBwrapArgv } from "./argv-builder.js";
 import { resolveBwrapBinary } from "./downloader.js";
+import { resolveGlobalModules } from "./node-modules.js";
 import { createSandcastleFsBridge } from "./fs-bridge.js";
+import { matchesDenyRule } from "./glob.js";
+import type { MountFact } from "./bind-rules.js";
 
 /** Fail fast: verify the sandbox can actually be created (userns etc.). */
 async function probeSandbox(bwrapBin: string): Promise<void> {
@@ -105,7 +108,31 @@ export function createBwrapSandboxBackendFactory(
     await probeSandbox(bwrapBin);
 
     const denyRules = resolved.binds.filter((b) => b.prefix === "-");
-    const { mounts, denied } = resolveBinds(resolved.binds, resolved.workspaceDir, resolved.workspaceAccess);
+    const { mounts: userMounts, denied } = resolveBinds(resolved.binds, resolved.workspaceDir, resolved.workspaceAccess);
+
+    // Auto-mount global node modules under ~/ (docs/UserGuide.md "Auto-Mounted").
+    const globalModules = resolveGlobalModules();
+    const autoMounts: MountFact[] = [];
+    let autoNodePath: string | null = null;
+    if (globalModules && globalModules.shouldMount && existsSync(globalModules.path)) {
+      // Deny rules can suppress the auto-mount (e.g. "-~/.npm-global/**").
+      const suppressed = denyRules.some((d) => {
+        return matchesDenyRule(expandHome(d.pattern), globalModules.path);
+      });
+      if (!suppressed) {
+        autoMounts.push({ kind: "ro-bind", host: globalModules.path, guest: globalModules.path });
+        if (globalModules.shouldSetNodePath) {
+          autoNodePath = globalModules.path;
+        }
+      }
+    }
+
+    const mounts = [...userMounts, ...autoMounts];
+
+    // Inject NODE_PATH into resolved env so it flows through filterEnv → --setenv.
+    if (autoNodePath && !resolved.env.NODE_PATH) {
+      resolved.env.NODE_PATH = autoNodePath;
+    }
 
     return {
       id: "bwrap",

@@ -166,6 +166,33 @@ These are always mounted and cannot be removed or overridden:
 | `/proc` | procfs | bwrap `--proc /proc` |
 | `/tmp` | tmpfs | bwrap `--tmpfs /tmp` |
 
+### Auto-Mounted: Global Node Modules
+
+When the global npm/node modules directory resolves to a path **under the user's home directory**, Sandcastle automatically mounts it **read-only**. This ensures that globally installed CLIs (`openclaw`, `npx`, etc.) are available inside the sandbox without manual configuration.
+
+**How it works:**
+
+- At sandbox startup, Sandcastle resolves the global node modules path using Node.js APIs (no `npm root -g` shell-out)
+- If the resolved path is under `~/` (e.g. `~/.npm-global/lib/node_modules`, `~/.nvm/versions/node/.../lib/node_modules`, `~/.volta/...`) → auto-mounted read-only
+- Sandcastle also sets `NODE_PATH` to the resolved path inside the sandbox, so Node.js can resolve global modules at runtime
+- If the path is already covered by a system mount (e.g. `/usr/lib/node_modules`) → no action needed, `NODE_PATH` not set (already in Node's default resolution)
+- If the path cannot be resolved (npm not installed, no prefix configured) → silently skipped, `NODE_PATH` not set
+
+**Override:**
+
+Users can explicitly control this with bind rules:
+
+```json5
+binds: [
+  "-~/.npm-global/**",    // deny — block the auto-mount
+  "~/.npm-global:rw",     // or upgrade to read-write
+]
+```
+
+Deny rules (`-`) always win over the auto-mount.
+
+**Why this is safe:** Global node modules contain installed packages and CLIs — no credentials, no secrets, no user data. It's functionally equivalent to `/usr/lib/node_modules`, just located under the home directory for non-root setups.
+
 ## Environment Variables
 
 Control which environment variables reach the sandbox:
