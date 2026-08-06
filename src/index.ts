@@ -1,8 +1,11 @@
 /**
  * openclaw-sandcastle — plugin entry.
  *
- * Registers the "bwrap" sandbox backend (Architecture.md §2, §5).
- * Any agent can opt in via `sandbox: { backend: "bwrap", ... }`.
+ * Registers the "sandcastle" sandbox backend (Architecture.md §2, §5).
+ * The alias "bwrap" is registered as a deprecated alias for backwards
+ * compatibility and will be removed in 1.0.
+ *
+ * Any agent can opt in via `sandbox: { backend: "sandcastle", ... }`.
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -20,8 +23,17 @@ const plugin: ReturnType<typeof definePluginEntry> = definePluginEntry({
   register(api) {
     storedPluginConfig = (api.pluginConfig as SandcastlePluginConfig) ?? {};
 
+    const factory = createBwrapSandboxBackendFactory(() => storedPluginConfig);
+
+    // Primary backend name (Architecture.md §8).
+    registerSandboxBackend("sandcastle", {
+      factory,
+      manager: bwrapSandboxBackendManager,
+    });
+
+    // Deprecated alias — same factory, removed in 1.0.
     registerSandboxBackend("bwrap", {
-      factory: createBwrapSandboxBackendFactory(() => storedPluginConfig),
+      factory,
       manager: bwrapSandboxBackendManager,
     });
   },

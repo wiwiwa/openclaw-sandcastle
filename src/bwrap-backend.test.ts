@@ -41,10 +41,12 @@ const BASE_PARAMS = {
   agentWorkspaceDir: "/home/user/ws",
   cfg: {
     mode: "non-main" as const,
-    backend: "bwrap" as const,
+    backend: "sandcastle" as const,
     scope: "session" as const,
     workspaceAccess: "rw" as const,
     workspaceRoot: "/home/user/ws",
+    mapDir: ["/opt/shared", "-**/.env"],
+    env: { PATH: true },
     docker: { image: "", containerPrefix: "", workdir: "", readOnlyRoot: false, tmpfs: [], network: "none", capDrop: [] },
     ssh: {},
     browser: { bridgeUrl: "" },
@@ -56,11 +58,12 @@ const BASE_PARAMS = {
 describe("createBwrapSandboxBackendFactory", () => {
   it("resolves plugin + agent config and builds an exec spec with bwrap argv", async () => {
     const factory = createBwrapSandboxBackendFactory(() => ({
-      bwrap: { binds: ["/opt/shared", "-**/.env"], env: { PATH: true } },
+      mapDir: ["/opt/shared", "-**/.env"],
+      env: { PATH: true },
     }));
     const handle = await factory(BASE_PARAMS);
 
-    expect(handle.id).toBe("bwrap");
+    expect(handle.id).toBe("sandcastle");
     expect(handle.workdir).toBe("/home/user/ws");
 
     const spec = await handle.buildExecSpec({

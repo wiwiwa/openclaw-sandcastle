@@ -1,12 +1,12 @@
 # openclaw-sandcastle — User Guide
 
-This guide covers configuration, bind rules, environment variables, troubleshooting, and operational details.
+This guide covers configuration, map rules, environment variables, troubleshooting, and operational details.
 
 ## Table of Contents
 
 - [Installation](#installation)
 - [Configuration](#configuration)
-- [Bind Rules](#bind-rules)
+- [Map Rules](#map-rules)
 - [Environment Variables](#environment-variables)
 - [Workspace Access](#workspace-access)
 - [Background Processes](#background-processes)
@@ -17,10 +17,10 @@ This guide covers configuration, bind rules, environment variables, troubleshoot
 
 ## Installation
 
-Sandcastle is an OpenClaw plugin. Once published:
+Sandcastle is an OpenClaw plugin published on [ClawHub](https://clawhub):
 
 ```bash
-openclaw plugin install openclaw-sandcastle
+openclaw plugins install clawhub:openclaw-sandcastle
 ```
 
 Or add it directly to your `openclaw.json` plugins config.
@@ -35,30 +35,30 @@ Or add it directly to your `openclaw.json` plugins config.
 
 ## Configuration
 
-Enable Sandcastle by setting `backend: "bwrap"` in your sandbox config:
+Enable Sandcastle by setting `backend: "sandcastle"` in your sandbox config:
 
 ```json5
 {
   agents: {
     defaults: {
       sandbox: {
-        backend: "bwrap",
+        backend: "sandcastle",
         mode: "non-main",        // "off" | "non-main" | "all"
         scope: "session",        // "agent" | "session" | "shared"
         workspaceAccess: "rw",   // "none" | "ro" | "rw"
-        bwrap: {
-          binds: [
-            // see Bind Rules section
-          ],
-          env: {
-            // see Environment Variables section
-          }
+        mapDir: [
+          // see Map Rules section
+        ],
+        env: {
+          // see Environment Variables section
         }
       }
     }
   }
 }
 ```
+
+> **Note:** `backend: "bwrap"` is accepted as a deprecated alias for `"sandcastle"` and will be removed in 1.0.
 
 ### Per-Agent Overrides
 
@@ -67,20 +67,16 @@ Enable Sandcastle by setting `backend: "bwrap"` in your sandbox config:
   agents: {
     defaults: {
       sandbox: {
-        backend: "bwrap",
+        backend: "sandcastle",
         mode: "all",
-        bwrap: {
-          binds: ["/opt/shared:ro"]
-        }
+        mapDir: ["/opt/shared:ro"]
       }
     },
     list: [
       {
         id: "dev",
         sandbox: {
-          bwrap: {
-            binds: ["/home/user/projects/myapp:rw"]
-          }
+          mapDir: ["/home/user/projects/myapp:rw"]
         }
       }
     ]
@@ -88,21 +84,22 @@ Enable Sandcastle by setting `backend: "bwrap"` in your sandbox config:
 }
 ```
 
-Per-agent binds are **merged** with global binds. Both apply.
+Per-agent `mapDir` entries are **merged** with global entries. Both apply.
 
 ### Settings Reference
 
 | Setting | Key | Values | Default |
 |---|---|---|---|
+| Backend | `sandbox.backend` | `sandcastle` (`bwrap` deprecated) | `sandcastle` |
 | Mode | `sandbox.mode` | `off`, `non-main`, `all` | `off` |
 | Scope | `sandbox.scope` | `agent`, `session`, `shared` | `agent` |
 | Workspace access | `sandbox.workspaceAccess` | `none`, `ro`, `rw` | `none` |
-| Binds | `sandbox.bwrap.binds` | array of glob patterns | `[]` |
-| Env | `sandbox.bwrap.env` | object | `{PATH, HOME, USER, LANG, LC_ALL: true}` |
+| Map rules | `sandbox.mapDir` | array of glob patterns | `[]` |
+| Env | `sandbox.env` | object | `{PATH, HOME, USER, LANG, LC_ALL: true}` |
 
-## Bind Rules
+## Map Rules
 
-Binds control which host paths are visible inside the sandbox.
+`mapDir` entries control which host paths are visible inside the sandbox.
 
 ### Syntax
 
@@ -119,7 +116,7 @@ Binds control which host paths are visible inside the sandbox.
 ### Examples
 
 ```json5
-binds: [
+mapDir: [
   "/usr/local/bin",              // mount read-only
   "/home/user/projects:rw",     // mount read-write
   "+~/OpenClaw",                 // force-allow (normally restricted)
@@ -141,7 +138,7 @@ binds: [
 `~/` (the home directory itself) and its parent directories (`/home`, `/`) **cannot be mounted** without the `+` prefix:
 
 ```json5
-binds: [
+mapDir: [
   "~/:rw",          // ❌ REJECTED — home dir requires + prefix
   "/home:rw",       // ❌ REJECTED — parent of home requires + prefix
   "+~/:rw",         // ✅ force-allowed — user explicitly accepts the risk
@@ -180,10 +177,10 @@ When the global npm/node modules directory resolves to a path **under the user's
 
 **Override:**
 
-Users can explicitly control this with bind rules:
+Users can explicitly control this with `mapDir` entries:
 
 ```json5
-binds: [
+mapDir: [
   "-~/.npm-global/**",    // deny — block the auto-mount
   "~/.npm-global:rw",     // or upgrade to read-write
 ]
@@ -266,7 +263,7 @@ This is transparent to the agent — `exec` with `background: true` and the `pro
 
 `read`, `write`, `edit`, and `apply_patch` are **not** wrapped in bwrap. They run in the Gateway process. Instead, Sandcastle enforces path policy:
 
-1. Before executing a file tool, the Gateway checks the target path against the bind rules (allow/deny globs)
+1. Before executing a file tool, the Gateway checks the target path against the map rules (allow/deny globs)
 2. If denied → returns **"file not exist"** (not "permission denied")
 3. This prevents information leakage — the agent can't tell whether a file exists at a denied path
 
@@ -306,7 +303,7 @@ Related to network namespace restrictions. Since Sandcastle v1 doesn't use `--un
 The sandbox only has the default OS mounts plus your configured binds. If the agent needs Node.js, Python, or other runtimes:
 
 - Ensure the runtime is installed on the host under a path that's in the default mounts (e.g. `/usr/bin/node`)
-- Or add the runtime's directory to `binds`
+- Or add the runtime's directory to `mapDir`
 
 ### File operations return "file not exist" unexpectedly
 
@@ -339,6 +336,6 @@ Sandcastle materially reduces the risk of accidental secret disclosure. It is **
 | Command | Sandcastle Behavior |
 |---|---|
 | `openclaw sandbox list` | Nothing to list (ephemeral) |
-| `openclaw sandbox explain` | Shows effective config, mounts, binds, deny rules, env vars |
+| `openclaw sandbox explain` | Shows effective config, mounts, map rules, deny rules, env vars |
 | `openclaw sandbox recreate` | No-op (each call is already fresh) |
 | `openclaw doctor` | Checks bwrap availability, capabilities, and auto-download status |

@@ -22,6 +22,16 @@ Sandcastle gives you the same isolation guarantees at a fraction of the cost:
 
 ## Quick Start
 
+### 1. Install
+
+Sandcastle is published on [ClawHub](https://clawhub). Install it with:
+
+```bash
+openclaw plugins install clawhub:openclaw-sandcastle
+```
+
+### 2. Configure
+
 Add Sandcastle to your OpenClaw config:
 
 ```json5
@@ -30,15 +40,13 @@ Add Sandcastle to your OpenClaw config:
   agents: {
     defaults: {
       sandbox: {
-        backend: "bwrap",
-        bwrap: {
-          binds: [
-            "/home/user/projects/myapp:rw",  // read-write project access
-            "~/OpenClaw",                    // read-only home subdir
-            "-**/.env",                      // block .env everywhere
-            "-~/.ssh/**"                     // block SSH keys
-          ]
-        }
+        backend: "sandcastle",
+        mapDir: [
+          "/home/user/projects/myapp:rw",  // read-write project access
+          "~/OpenClaw",                    // read-only home subdir
+          "-**/.env",                      // block .env everywhere
+          "-~/.ssh/**"                     // block SSH keys
+        ]
       }
     }
   }
@@ -53,7 +61,7 @@ That's it. Non-main agent sessions now run sandboxed.
 
 ### Control File Access
 
-Use **bind rules** to decide exactly what the sandbox can see:
+Use **map rules** to decide exactly what the sandbox can see:
 
 | Syntax | Meaning |
 |---|---|

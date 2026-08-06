@@ -11,9 +11,10 @@
       "backend": {
         "type": "string",
         "enum": [
+          "sandcastle",
           "bwrap"
         ],
-        "description": "Sandbox backend (v1: bwrap only)."
+        "description": "Sandbox backend. 'sandcastle' is the canonical name; 'bwrap' is a deprecated alias (removed in 1.0)."
       },
       "mode": {
         "type": "string",
@@ -41,32 +42,26 @@
         ],
         "description": "Workspace mount mode inside the sandbox."
       },
-      "bwrap": {
+      "mapDir": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Glob map rules: [prefix]<path>[:mode]. + force-allow, - deny (wins). Merged global + per-agent."
+      },
+      "env": {
         "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "binds": {
-            "type": "array",
-            "items": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
               "type": "string"
-            },
-            "description": "Glob bind rules: [prefix]<path>[:mode]. + force-allow, - deny (wins)."
-          },
-          "env": {
-            "type": "object",
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "boolean"
-                },
-                {
-                  "type": "string"
-                }
-              ]
-            },
-            "description": "Env schema: true = pass host value, false = strip, string = literal. Unlisted vars are stripped."
-          }
-        }
+            }
+          ]
+        },
+        "description": "Env schema: true = pass host value, false = strip, string = literal. Unlisted vars are stripped (deny-by-default)."
       }
     }
   }

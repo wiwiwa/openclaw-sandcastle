@@ -4,7 +4,7 @@
 **Status:** v1 — aligned to locked PM design spec (Prada). Dev source of truth for Jordan.
 **Last updated:** 2026-08-04
 
-This document is the **single source of truth** for how openclaw-sandcastle is structured. If it disagrees with the README or UserGuide, this file wins.
+This document is the **single source of truth** for how openclaw-sandcastle is structured. The README and UserGuide define the **public config contract** (config keys, user-facing behavior); this file governs the internal structure that implements it. Where this file and the requirement docs disagree on the **config surface** (`backend`, `mapDir`, `env`), the requirement docs win and this file must track them; on internal design, this file wins.
 
 ---
 
@@ -28,7 +28,7 @@ A sandboxed agent has **full network access** in v1. Sandcastle must never be de
                      ┌──────────────────────────────┐
                      │        OpenClaw Gateway      │
                      │                              │
-                     │  sandbox backend: "bwrap"    │
+                     │ sandbox backend: "sandcastle" │
                      └──────────────┬───────────────┘
                                     │
                           exec / file-tool call
@@ -46,14 +46,14 @@ A sandboxed agent has **full network access** in v1. Sandcastle must never be de
                      ┌──────────────▼───────────────┐
                      │       bwrap sandbox (NS)     │
                      │  private PID nspc + mount ns │
-                     │  minimal OS fs + user binds  │
+                     │  minimal OS fs + map rules  │
                      │  script/command runs here    │
                      └──────────────┬───────────────┘
                                     │
               ┌─────────────────────┼─────────────────────┐
               │                     │                     │
      ┌────────▼───────┐    ┌────────▼───────┐    ┌────────▼───────┐
-     │ default mounts │    │  user binds    │    │  denied paths  │
+     │ default mounts │    │ map-rule dirs  │    │  denied paths  │
      │ /usr /lib/bin  │    │  glob/ro/rw    │    │  -**/.env etc. │
      │ (ro) /tmp      │    │  + force-allow │    │  (unreachable) │
      └────────────────┘    └────────────────┘    └────────────────┘
@@ -141,14 +141,14 @@ Non-exec file tools are enforced by Gateway path policy returning **`"file not e
 
 | Component | Responsibility | Interfaces |
 |---|---|---|
-| **Config resolver** | Merges global + per-agent sandbox config | `merged Binds[]`, `merged Env{}`, mode/scope/workspace |
-| **Bind-rule engine** | Compiles glob binds → ordered bwrap mount flags; enforces deny-wins + `+` force-allow + home-parent guard | glob → `--ro-bind` / `--bind` / deny |
+| **Config resolver** | Merges global + per-agent sandbox config; resolves `bwrap`→`sandcastle` backend alias | `merged mapDir[]`, `merged Env{}`, mode/scope/workspace |
+| **Map-rule engine** | Compiles glob map rules (`mapDir`) → ordered bwrap mount flags; enforces deny-wins + `+` force-allow + home-parent guard | glob → `--ro-bind` / `--bind` / deny |
 | **Env filter** | Produces final env map (deny-by-default) | `Env{}` → `--setenv` / stripped set |
 | **bwrap invocation builder** | Assembles exact `bwrap` argv (§6) | config → argv[] |
 | **Lifecycle / PID tracker** | Wraps exec with nohup/setsid; records PID; supports nsenter follow-up | exec → subprocess, PID registry |
 | **Auto-downloader** | Fetches `bubblewrap-static` from Alpine latest-stable to `~/.cache/openclaw/bwrap/` when `bwrap` not on PATH | → bwrap binary path |
 
-The **bwrap backend interface** is the seam ADR-004 will replace with a macOS backend. Keep the invocation builder backend-agnostic: emit "mounts / env / command" facts, let the selected backend turn them into real flags.
+The **exec backend interface** is the seam ADR-004 will replace with a macOS (sandcastle/ES) backend. Keep the invocation builder backend-agnostic: emit "mounts / env / command" facts, let the selected backend turn them into real flags.
 
 ---
 
@@ -168,8 +168,8 @@ bwrap \
   --dev /dev \
   --proc /proc                           # private PID-ns, read-only (ADR-005)
   --tmpfs /tmp \
-  [ --bind <host> <guest> ]              # each :rw bind
-  [ --ro-bind <host> <guest> ]           # each :ro / default bind
+  [ --bind <host> <guest> ]              # each :rw map rule
+  [ --ro-bind <host> <guest> ]           # each :ro / default map rule
   [ --setenv NAME value ]                # per allowlisted env entry
   --chdir <workspace> \
   [ --clearenv ] \                       # enforce deny-by-default start (ns-level)
@@ -178,7 +178,7 @@ bwrap \
 
 Notes:
 - **`--unshare-user`** required for unprivileged bwrap; if the host forbids user namespaces (e.g. AppArmor), **fail fast** with a clear error — never silently degrade to unsandboxed.
-- Not-a-default OS mounts precede user binds so user binds layer on top.
+- Not-a-default OS mounts precede user map rules so user map rules layer on top.
 - **Deny rules produce no argv** — resolved upstream by the bind-rule engine, which also rejects a deny overlapping an inherited default mount (e.g. `-/usr` → config error).
 - **`--clearenv`** (when supported) + allowlisted `--setenv` is the single, authoritative env control — sufficient for the stated threat model (accidental self-disclosure). No `env -i` wrapper in the default chain.
 - **Fallback (implementation note):** `--clearenv`/`--setenv` behavior is version-dependent. *If* a specific bwrap version proves unreliable at clearing the namespace env, add an `env -i [NAME=value] ... -- <cmd>` wrapper as the final exec step — a contingency, not a default layer. Guarantees absence (nothing secret in `/proc/self/environ`), not blocking (see ADR-005 limitation).
@@ -189,8 +189,8 @@ Notes:
 ## 7. Data Flow
 
 1. Agent issues `exec` or file-tool call for a sandboxed session (mode/scope gate).
-2. Config resolver produces merged binds + env.
-3. **Bind-rule engine** resolves allow/deny → ordered mount flags (fail-closed on deny-wins, §4.1).
+2. Config resolver produces merged map rules + env.
+3. **Map-rule engine** resolves allow/deny → ordered mount flags (fail-closed on deny-wins, §4.1).
 4. **Env filter** produces final env map (unlisted = stripped, §4.3).
 5. **Invocation builder** assembles argv per §6.
 6. bwrap launches the sandbox; command runs inside a **private pid+mount namespace**.
@@ -207,12 +207,12 @@ Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 
 | Setting | Meaning | Default |
 |---|---|---|
-| `sandbox.backend` | `"bwrap"` (v1) | enabled path |
+| `sandbox.backend` | `"sandcastle"` (alias `"bwrap"` accepted, deprecated, removed in 1.0) | `"sandcastle"` |
 | `sandbox.mode` | `off` / `non-main` / `all` | `off` |
 | `sandbox.scope` | `agent` / `session` / `shared` | `agent` |
 | `sandbox.workspaceAccess` | `none` / `ro` / `rw` | `none` |
-| `sandbox.bwrap.binds` | glob bind list (merged) | `[]` |
-| `sandbox.bwrap.env` | env map (deny-by-default) | `{PATH,HOME,USER,LANG,LC_ALL:true}` |
+| `sandbox.mapDir` | glob map-rule list (merged; allow/deny/`+` force-allow) | `[]` |
+| `sandbox.env` | env map (deny-by-default) | `{PATH,HOME,USER,LANG,LC_ALL:true}` |
 
 **`scope` note (architect recommendation):** `shared` implies a *persistent* sandbox namespace, which conflicts with the ephemeral-per-exec lifecycle (§4.2). **Recommend v1 ships `agent` + `session` only; defer `shared`.** Flagged to PM (Prada) for sign-off; until confirmed, implement `agent` + `session`.
 
@@ -223,7 +223,7 @@ Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 | Card acceptance | Where it lives |
 |---|---|
 | Sub-agent runs isolated via bwrap | §6 invocation, §7 flow |
-| Only whitelisted paths visible | §5 bind engine, ADR-003 |
+| Only whitelisted paths visible | §5 map-rule engine, ADR-003 |
 | Denied paths unreadable **and** unlisted | §4.4 (file tools), §6 (exec: deny → no argv; "file not exist") |
 | Document exact bwrap invocation/flags | §6 ✅ |
 
@@ -250,6 +250,6 @@ Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 
 ## 12. Related Documents
 
-- `README.md` — overview, quick start, bind syntax.
+- `README.md` — overview, quick start, map-rule syntax.
 - `docs/UserGuide.md` — operational/config detail.
 - Workboard card `eaa8fef5-…` — original requirement + locked design spec.

@@ -16,7 +16,7 @@ import type {
   SandboxBackendHandle,
   SandboxBackendManager,
 } from "openclaw/plugin-sdk/sandbox";
-import type { SandcastlePluginConfig } from "./config.js";
+import type { SandcastlePluginConfig, SandcastleAgentConfig } from "./config.js";
 import { resolveSandcastleConfig } from "./config.js";
 import { resolveBinds, isPathDenied, expandHome } from "./bind-rules.js";
 import { filterEnv } from "./env-filter.js";
@@ -93,11 +93,14 @@ export function createBwrapSandboxBackendFactory(
 ): SandboxBackendFactory {
   return async (params: CreateSandboxBackendParams): Promise<SandboxBackendHandle> => {
     const pluginConfig = getPluginConfig();
-    // Per-agent `sandbox.bwrap.*` (design: agents.defaults.sandbox.bwrap) is
-    // read defensively off the resolved sandbox config, merged over global
-    // plugin config (Architecture.md §8 "Merge Behavior").
-    const agentBwrap = (params.cfg as unknown as { bwrap?: SandcastlePluginConfig["bwrap"] }).bwrap;
-    const resolved = resolveSandcastleConfig(pluginConfig, agentBwrap, {
+    // Per-agent `sandbox.mapDir` / `sandbox.env` (Architecture.md §8).
+    // Read defensively off the resolved sandbox config, merged over global
+    // plugin config.
+    const agentCfg: SandcastleAgentConfig = {
+      mapDir: (params.cfg as unknown as { mapDir?: string[] }).mapDir,
+      env: (params.cfg as unknown as { env?: Record<string, boolean | string> }).env,
+    };
+    const resolved = resolveSandcastleConfig(pluginConfig, agentCfg, {
       mode: params.cfg.mode,
       scope: params.cfg.scope,
       workspaceAccess: params.cfg.workspaceAccess,
@@ -135,8 +138,8 @@ export function createBwrapSandboxBackendFactory(
     }
 
     return {
-      id: "bwrap",
-      runtimeId: `bwrap-${params.scopeKey}`,
+      id: "sandcastle",
+      runtimeId: `sandcastle-${params.scopeKey}`,
       runtimeLabel: `Sandcastle (${params.scopeKey})`,
       workdir: params.workspaceDir,
       env: filterEnv(resolved.env).env,

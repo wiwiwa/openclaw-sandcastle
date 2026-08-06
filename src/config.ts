@@ -2,7 +2,7 @@
  * Sandcastle plugin configuration types + resolution.
  *
  * Follows Architecture.md §4.3, §8. Config lives under the agent sandbox
- * config (`sandbox.bwrap.*` per-agent) merged over global plugin config.
+ * config (`sandbox.mapDir`, `sandbox.env`) merged over global plugin config.
  */
 
 export type SandboxMode = "off" | "non-main" | "all";
@@ -21,23 +21,25 @@ export interface ParsedBind {
 /** Env schema entry: true = pass host value, false = strip, string = literal. */
 export type EnvEntry = boolean | string;
 
-export interface SandcastleBwrapConfig {
-  binds?: string[];
+/** Per-agent sandbox config excerpt (the new flat shape). */
+export interface SandcastleAgentConfig {
+  mapDir?: string[];
   env?: Record<string, EnvEntry>;
 }
 
 /** Plugin-level config (global defaults). */
 export interface SandcastlePluginConfig {
-  backend?: "bwrap";
+  backend?: "sandcastle" | "bwrap";
   mode?: SandboxMode;
   scope?: SandboxScope;
   workspaceAccess?: WorkspaceAccess;
-  bwrap?: SandcastleBwrapConfig;
+  mapDir?: string[];
+  env?: Record<string, EnvEntry>;
 }
 
 /** Fully resolved sandbox config for one backend session. */
 export interface ResolvedSandcastleConfig {
-  backend: "bwrap";
+  backend: "sandcastle";
   mode: SandboxMode;
   scope: SandboxScope;
   workspaceAccess: WorkspaceAccess;
@@ -59,9 +61,9 @@ export const DEFAULT_WORKSPACE_ACCESS: WorkspaceAccess = "none";
 const SCOPE_WHITELIST: SandboxScope[] = ["agent", "session"];
 
 /**
- * Merge global plugin config + per-agent `sandbox.bwrap` overrides.
+ * Merge global plugin config + per-agent sandbox config.
  *
- * - binds: concatenated (global first). Deny rules from either apply across both.
+ * - mapDir: concatenated (global first). Deny rules from either apply across both.
  * - env: per-agent wins per key over global.
  * - mode/scope/workspaceAccess: per-agent (from sandbox config) wins.
  *
@@ -70,15 +72,15 @@ const SCOPE_WHITELIST: SandboxScope[] = ["agent", "session"];
  */
 export function resolveSandcastleConfig(
   pluginConfig: SandcastlePluginConfig,
-  agentBwrap: SandcastleBwrapConfig | undefined,
+  agentCfg: SandcastleAgentConfig | undefined,
   sandboxCfg: { mode?: SandboxMode; scope?: SandboxScope; workspaceAccess?: WorkspaceAccess; workspaceDir: string },
 ): ResolvedSandcastleConfig {
   const global = pluginConfig ?? {};
-  const agent = agentBwrap ?? {};
+  const agent = agentCfg ?? {};
 
-  const binds = [...(global.bwrap?.binds ?? []), ...(agent.binds ?? [])].map(parseBindRule);
+  const binds = [...(global.mapDir ?? []), ...(agent.mapDir ?? [])].map(parseBindRule);
 
-  const env: Record<string, EnvEntry> = { ...DEFAULT_ENV, ...(global.bwrap?.env ?? {}) };
+  const env: Record<string, EnvEntry> = { ...DEFAULT_ENV, ...(global.env ?? {}) };
   for (const [k, v] of Object.entries(agent.env ?? {})) {
     env[k] = v;
   }
@@ -92,7 +94,7 @@ export function resolveSandcastleConfig(
   }
 
   return {
-    backend: "bwrap",
+    backend: "sandcastle",
     mode: sandboxCfg.mode ?? global.mode ?? "off",
     scope,
     workspaceAccess: sandboxCfg.workspaceAccess ?? global.workspaceAccess ?? DEFAULT_WORKSPACE_ACCESS,

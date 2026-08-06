@@ -34,10 +34,10 @@ describe("parseBindRule", () => {
 describe("resolveSandcastleConfig", () => {
   const base = { workspaceDir: "/home/user/ws" };
 
-  it("merges global + per-agent binds, global first", () => {
+  it("merges global + per-agent mapDir, global first", () => {
     const cfg = resolveSandcastleConfig(
-      { bwrap: { binds: ["/opt/shared"] } },
-      { binds: ["/home/user/projects:rw"] },
+      { mapDir: ["/opt/shared"] },
+      { mapDir: ["/home/user/projects:rw"] },
       base,
     );
     expect(cfg.binds.map((b) => b.pattern)).toEqual(["/opt/shared", "/home/user/projects"]);
@@ -46,7 +46,7 @@ describe("resolveSandcastleConfig", () => {
 
   it("merges env per-key with per-agent winning", () => {
     const cfg = resolveSandcastleConfig(
-      { bwrap: { env: { PATH: true, NODE_ENV: "global" } } },
+      { env: { PATH: true, NODE_ENV: "global" } },
       { env: { NODE_ENV: "per-agent" } },
       base,
     );
@@ -63,6 +63,11 @@ describe("resolveSandcastleConfig", () => {
     expect(cfg.mode).toBe("off");
     expect(cfg.scope).toBe("agent");
     expect(cfg.workspaceAccess).toBe("none");
+  });
+
+  it("resolves backend to 'sandcastle'", () => {
+    const cfg = resolveSandcastleConfig({}, undefined, base);
+    expect(cfg.backend).toBe("sandcastle");
   });
 
   it("rejects scope shared (v1 deferral, Architecture.md §8)", () => {
