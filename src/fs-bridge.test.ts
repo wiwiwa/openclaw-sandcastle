@@ -8,12 +8,20 @@ const HOME = os.homedir();
 const WS = path.join(HOME, "ws");
 const denyRules = ["-~/.ssh/**", "-**/.env"].map(parseBindRule);
 
-function bridge(overrides: { workspaceAccess?: "none" | "ro" | "rw"; deniedPaths?: string[] } = {}) {
+// Default allowed paths simulate what bwrap would mount: OS dirs + workspace + user binds.
+const DEFAULT_ALLOWED = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/dev", "/proc", "/tmp", WS];
+
+function bridge(overrides: {
+  workspaceAccess?: "none" | "ro" | "rw";
+  deniedPaths?: string[];
+  allowedPaths?: string[];
+} = {}) {
   return createSandcastleFsBridge({
     workspaceDir: WS,
     workspaceAccess: overrides.workspaceAccess ?? "rw",
     denyRules,
     deniedPaths: overrides.deniedPaths ?? [],
+    allowedPaths: overrides.allowedPaths ?? DEFAULT_ALLOWED,
   });
 }
 
@@ -47,7 +55,7 @@ describe("createSandcastleFsBridge", () => {
   });
 
   it("workspaceAccess none → workspace paths ENOENT", async () => {
-    const b = bridge({ workspaceAccess: "none" });
+    const b = bridge({ workspaceAccess: "none", allowedPaths: ["/usr", "/tmp"] });
     await expect(b.readFile({ filePath: `${WS}/x.ts` })).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -63,7 +71,7 @@ describe("createSandcastleFsBridge", () => {
   });
 
   it("deniedPaths overlays are enforced", async () => {
-    const b = bridge({ deniedPaths: ["/opt/secret"] });
+    const b = bridge({ deniedPaths: ["/opt/secret"], allowedPaths: [...DEFAULT_ALLOWED, "/opt/secret"] });
     await expect(b.readFile({ filePath: "/opt/secret/keys" })).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -80,5 +88,41 @@ describe("createSandcastleFsBridge", () => {
     expect(err).toBeInstanceOf(SandcastleFsError);
     expect((err as SandcastleFsError).code).toBe("ENOENT");
     expect((err as Error).message).toContain("file not exist");
+  });
+
+  // ── Default-deny tests ──
+
+  it("blocks paths not under any allowed mount (default-deny)", async () => {
+    const b = bridge();
+    // ~/.openclaw is not in allowedPaths
+    await expect(b.readFile({ filePath: path.join(HOME, ".openclaw/secrets") })).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // /etc is not in allowedPaths
+    await expect(b.readFile({ filePath: "/etc/passwd" })).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("allows paths under explicitly allowed mounts", async () => {
+    const b = bridge({ allowedPaths: [...DEFAULT_ALLOWED, "/opt/tools"] });
+    const buf = await b.readFile({ filePath: "/opt/tools/script.sh" });
+    expect(buf.toString()).toBe("data");
+  });
+
+  it("blocks writes to non-workspace paths even when mounted rw", async () => {
+    const b = bridge({ allowedPaths: [...DEFAULT_ALLOWED, "/opt/data"] });
+    await expect(b.writeFile({ filePath: "/opt/data/file", data: "x" })).rejects.toMatchObject({
+      code: "EACCES",
+    });
+  });
+
+  it("allows reads from OS default mounts", async () => {
+    const b = bridge();
+    const buf = await b.readFile({ filePath: "/usr/bin/node" });
+    expect(buf.toString()).toBe("data");
+  });
+
+  it("stat on non-allowed path returns null (absent)", async () => {
+    const b = bridge();
+    expect(await b.stat({ filePath: path.join(HOME, ".openclaw") })).toBeNull();
   });
 });

@@ -2,11 +2,16 @@
  * File-tool enforcement bridge (Architecture.md §4.4).
  *
  * Non-exec file tools are NOT wrapped in bwrap — they run in the Gateway
- * process. This bridge enforces the same deny/access policy at the path
- * level:
- *   - denied paths      → "file not exist" (ENOENT), never "permission denied"
- *   - workspaceAccess none → workspace paths → ENOENT
- *   - workspaceAccess ro   → writes → EACCES ("permission denied")
+ * process. This bridge enforces the same **default-deny** posture as bwrap:
+ * only paths that correspond to an actual mount inside the sandbox are
+ * accessible. Everything else → ENOENT ("file not exist"), matching what
+ * the agent would see from inside the namespace.
+ *
+ * Enforcement layers:
+ *   1. Denied paths (deny rules + tmpfs overlays) → ENOENT
+ *   2. Allowed paths (mounted guests + workspace) → accessible
+ *   3. Everything else → ENOENT (default-deny)
+ *   4. Write gate: workspaceAccess ro → EACCES on workspace writes
  *
  * Paths map 1:1 to the host filesystem (bwrap mount namespaces share the
  * host fs — no docker-cp/remote indirection needed).
@@ -37,32 +42,51 @@ export interface SandcastleFsBridgeOptions {
   denyRules: ParsedBind[];
   /** Guest paths shadowed by empty tmpfs overlays. */
   deniedPaths?: string[];
+  /**
+   * Allowed mount guest paths — the paths that exist inside the bwrap
+   * namespace (default OS mounts, user binds, auto-mounts, /tmp, etc.).
+   * File tools can only access paths under these roots (default-deny).
+   */
+  allowedPaths: string[];
 }
 
 export function createSandcastleFsBridge(opts: SandcastleFsBridgeOptions): SandboxFsBridge {
-  const { workspaceDir, workspaceAccess, denyRules, deniedPaths = [] } = opts;
+  const { workspaceDir, workspaceAccess, denyRules, deniedPaths = [], allowedPaths } = opts;
 
   function resolveAbsolute(filePath: string, cwd?: string): string {
     if (path.isAbsolute(filePath)) return filePath;
     return path.resolve(cwd ?? workspaceDir, filePath);
   }
 
-  /** Policy gate: throw ENOENT for denied paths (anti-information-leak). */
+  /** Check whether a path is under (or equal to) an allowed mount root. */
+  function isUnderAllowed(abs: string): boolean {
+    return allowedPaths.some(
+      (p) => abs === p || abs.startsWith(p.endsWith("/") ? p : p + "/"),
+    );
+  }
+
+  /**
+   * Policy gate (default-deny):
+   *   1. Denied paths → ENOENT (anti-information-leak)
+   *   2. Not under any allowed mount → ENOENT (same as inside bwrap)
+   */
   function assertAllowed(p: { filePath: string; cwd?: string }): string {
     const abs = resolveAbsolute(p.filePath, p.cwd);
+    // 1. Deny rules and tmpfs overlays.
     if (isPathDenied(denyRules, abs)) {
       throw new SandcastleFsError("ENOENT", `file not exist: ${abs}`);
     }
     if (deniedPaths.some((d) => abs === d || abs.startsWith(d.endsWith("/") ? d : d + "/"))) {
       throw new SandcastleFsError("ENOENT", `file not exist: ${abs}`);
     }
-    if (workspaceAccess === "none" && (abs === workspaceDir || abs.startsWith(workspaceDir + path.sep))) {
+    // 2. Default-deny: must be under an allowed mount or the workspace.
+    if (!isUnderAllowed(abs)) {
       throw new SandcastleFsError("ENOENT", `file not exist: ${abs}`);
     }
     return abs;
   }
 
-  /** Write gate: ro workspace → EACCES. */
+  /** Write gate: only rw workspace is writable. */
   function assertWritable(abs: string): void {
     if (workspaceAccess !== "rw") {
       const inWorkspace = abs === workspaceDir || abs.startsWith(workspaceDir + path.sep);
@@ -70,6 +94,15 @@ export function createSandcastleFsBridge(opts: SandcastleFsBridgeOptions): Sandb
         throw new SandcastleFsError("EACCES", `permission denied: ${abs}`);
       }
     }
+    // Non-workspace paths are never writable through file tools, even if
+    // mounted rw inside bwrap (file tools run in Gateway, not the sandbox).
+    if (!inWorkspaceCheck(abs)) {
+      throw new SandcastleFsError("EACCES", `permission denied: ${abs}`);
+    }
+  }
+
+  function inWorkspaceCheck(abs: string): boolean {
+    return abs === workspaceDir || abs.startsWith(workspaceDir + path.sep);
   }
 
   return {
@@ -130,7 +163,7 @@ export function createSandcastleFsBridge(opts: SandcastleFsBridgeOptions): Sandb
       try {
         abs = assertAllowed(p);
       } catch {
-        return null; // denied paths stat as absent
+        return null; // denied/non-existent paths stat as absent
       }
       try {
         const s = await fs.stat(abs);

@@ -134,7 +134,13 @@ export function createBwrapSandboxBackendFactory(
 
       async buildExecSpec({ command, workdir, env, usePty }): Promise<SandboxBackendExecSpec> {
         const filtered = filterEnv(resolved.env, { ...process.env, ...env });
-        const chdir = workdir ?? resolved.workspaceDir ?? "/";
+        // Only chdir to workspace if it's actually mounted; otherwise fall back
+        // to / so bwrap doesn't fail on a non-existent directory.
+        const requestedDir = workdir ?? resolved.workspaceDir;
+        const isMounted = requestedDir && mounts.some(
+          (m) => m.guest === requestedDir || requestedDir.startsWith(m.guest.endsWith("/") ? m.guest : m.guest + "/"),
+        );
+        const chdir = isMounted ? requestedDir! : "/";
         return {
           argv: buildBwrapArgv({
             bwrapBin,
@@ -151,12 +157,16 @@ export function createBwrapSandboxBackendFactory(
 
       async runShellCommand(p: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult> {
         const filtered = filterEnv(resolved.env);
+        const requestedDir = resolved.workspaceDir;
+        const isMounted = requestedDir && mounts.some(
+          (m) => m.guest === requestedDir || requestedDir.startsWith(m.guest.endsWith("/") ? m.guest : m.guest + "/"),
+        );
         return runBwrap(bwrapBin, {
           bwrapBin,
           mounts,
           setenvEntries: filtered.setenvEntries,
           env: filtered.env,
-          chdir: resolved.workspaceDir ?? "/",
+          chdir: isMounted ? requestedDir! : "/",
           command: p.args?.length ? [p.script, ...p.args] : ["/bin/sh", "-c", p.script],
         });
       },
@@ -167,6 +177,7 @@ export function createBwrapSandboxBackendFactory(
           workspaceAccess: resolved.workspaceAccess,
           denyRules,
           deniedPaths: denied,
+          allowedPaths: mounts.map((m) => m.guest),
         }),
     };
   };
