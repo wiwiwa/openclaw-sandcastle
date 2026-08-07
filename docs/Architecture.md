@@ -94,13 +94,13 @@ An ADR is recorded only when a decision has **structural consequence or irrevers
 - **Decision:** Target `sandbox-exec` or Endpoint Security (ES) on macOS; no bwrap there. Backend abstracted behind an interface so the macOS backend plugs in later. v1 ships Linux-only.
 - **Rationale:** bwrap is Linux-only; keep the seam ready without building it now.
 
-### ADR-005 — `/proc` private namespace, read-only (architect-owned)
+### ADR-005 — `/proc` private namespace (architect-owned)
 
-- **Decision:** Mount `/proc` via bwrap `--proc` inside a **private PID namespace** (`--unshare-pid`), read-only. `/dev` via `--dev` (devtmpfs).
+- **Decision:** Mount `/proc` via bwrap `--proc` inside a **private PID namespace** (`--unshare-pid`). `/dev` via `--dev` (devtmpfs). The procfs is **writable** in v1 (bwrap `--proc` does not support read-only); read-only proc is a known limitation (see below).
 - **Rationale / how the defense chains:**
   - Private PID-ns means `/proc` shows **only the sandbox's own processes**, not the host's (no host process/PID enumeration).
-  - Read-only mount prevents mutation of kernel interfaces.
-  - `/proc/self/environ` still reflects the *sandbox's own* env, so **`/proc` alone cannot be the defense** for secrets. The **authoritative defense is env-stripping / empty-by-construction at the gateway boundary** (§4.3, §6: `--clearenv` + allowlisted `--setenv`); private+ro `/proc` is defense-in-depth so that even a read of `/proc/self/environ` finds secrets already absent.
+  - procfs is writable in v1 (bwrap `--proc` has no read-only mode); mutation of kernel interfaces via `/proc` is a known, accepted limitation. Read-only proc requires an additional bind-remount or LSM rule — deferred.
+  - `/proc/self/environ` still reflects the *sandbox's own* env, so **`/proc` alone cannot be the defense** for secrets. The **authoritative defense is env-stripping / empty-by-construction at the gateway boundary** (§4.3, §6: `--clearenv` + allowlisted `--setenv`); private PID-ns `/proc` is defense-in-depth so that even a read of `/proc/self/environ` finds secrets already absent.
 - **Known limitation (explicit):** `/proc/self/environ` cannot be bind-scrubbed (procfs does not allow overriding individual files), and no exec-time strip survives a process re-exporting a secret to a child. The design therefore guarantees **absence** (empty-by-construction), not **blocking**. Hard read-blocking requires an LSM rule (AppArmor/SELinux deny `@{PROC}/[0-9]*/environ`), which is **deferred / out of scope for v1** due to distro-specific deployment fragility — recorded here to revisit if the threat model escalates.
 - **Owner:** Morgan (architect). Decision made, not open.
 
@@ -115,7 +115,7 @@ These are the locked functional specifications from the PM design spec.
 
 ### 4.2 Ephemeral lifecycle + background processes
 - **Ephemeral:** a **fresh bwrap instance per exec call**; no persistent sandbox. Sandbox gone when the command exits; callers own state.
-- **Background:** a daemonizing command survives the exec wrapper via `nohup`/`setsid`, with **PID tracking** and **`nsenter`** for follow-up interaction (re-enters the namespace by tracked PID).
+- **Background:** a daemonizing command survives the exec wrapper via `nohup`/`setsid`, with **PID tracking** and **`nsenter`** for follow-up interaction (re-enters the namespace by tracked PID). **Implementation status:** helpers exist in `lifecycle.ts` (`buildDetachedCommand`, `buildNsenterCommand`, `PidRegistry`) but are **not yet wired** into the backend exec path; background process support is in progress for v1.
 
 ### 4.3 Environment: deny-by-default + empty-by-construction
 - Schema `{ NAME: true | false | "literal" }`. **Any variable not listed is stripped.**
@@ -132,7 +132,7 @@ Non-exec file tools are enforced by Gateway path policy returning **`"file not e
 |---|---|
 | `/usr`, `/lib`, `/lib64` (if present), `/bin`, `/sbin` | read-only bind |
 | `/dev` | devtmpfs (`--dev`) |
-| `/proc` | **private PID-ns, read-only** (ADR-005) |
+| `/proc` | **private PID-ns** via `--proc` (ADR-005); writable procfs in v1 |
 | `/tmp` | tmpfs (`--tmpfs`) |
 
 ---
@@ -141,7 +141,7 @@ Non-exec file tools are enforced by Gateway path policy returning **`"file not e
 
 | Component | Responsibility | Interfaces |
 |---|---|---|
-| **Config resolver** | Merges global + per-agent sandbox config; resolves `bwrap`→`sandcastle` backend alias | `merged mapDir[]`, `merged Env{}`, mode/scope/workspace |
+| **Config resolver** | Merges plugin config (`mapDir`/`env` — global-only in v1) with core-resolved sandbox config (mode/scope/workspaceAccess); resolves `bwrap`→`sandcastle` backend alias | `merged mapDir[]`, `merged Env{}`, mode/scope/workspace |
 | **Map-rule engine** | Compiles glob map rules (`mapDir`) → ordered bwrap mount flags; enforces deny-wins + `+` force-allow + home-parent guard | glob → `--ro-bind` / `--bind` / deny |
 | **Env filter** | Produces final env map (deny-by-default) | `Env{}` → `--setenv` / stripped set |
 | **bwrap invocation builder** | Assembles exact `bwrap` argv (§6) | config → argv[] |
@@ -166,13 +166,13 @@ bwrap \
   [ --ro-bind /lib64 /lib64 ]            # only if host has /lib64
   --ro-bind /sbin /sbin \
   --dev /dev \
-  --proc /proc                           # private PID-ns, read-only (ADR-005)
+  --proc /proc                           # private PID-ns (ADR-005)
   --tmpfs /tmp \
   [ --bind <host> <guest> ]              # each :rw map rule
   [ --ro-bind <host> <guest> ]           # each :ro / default map rule
-  [ --setenv NAME value ]                # per allowlisted env entry
+  --clearenv                             # enforce deny-by-default start (ns-level)
+  [ --setenv NAME value ]                # per allowlisted env entry (after clearenv)
   --chdir <workspace> \
-  [ --clearenv ] \                       # enforce deny-by-default start (ns-level)
   -- <command...>
 ```
 
@@ -180,7 +180,7 @@ Notes:
 - **`--unshare-user`** required for unprivileged bwrap; if the host forbids user namespaces (e.g. AppArmor), **fail fast** with a clear error — never silently degrade to unsandboxed.
 - Not-a-default OS mounts precede user map rules so user map rules layer on top.
 - **Deny rules produce no argv** — resolved upstream by the bind-rule engine, which also rejects a deny overlapping an inherited default mount (e.g. `-/usr` → config error).
-- **`--clearenv`** (when supported) + allowlisted `--setenv` is the single, authoritative env control — sufficient for the stated threat model (accidental self-disclosure). No `env -i` wrapper in the default chain.
+- **`--clearenv`** unconditionally + allowlisted `--setenv` (applied after clear) is the single, authoritative env control — sufficient for the stated threat model (accidental self-disclosure). No `env -i` wrapper in the default chain.
 - **Fallback (implementation note):** `--clearenv`/`--setenv` behavior is version-dependent. *If* a specific bwrap version proves unreliable at clearing the namespace env, add an `env -i [NAME=value] ... -- <cmd>` wrapper as the final exec step — a contingency, not a default layer. Guarantees absence (nothing secret in `/proc/self/environ`), not blocking (see ADR-005 limitation).
 - **`--die-with-parent`** guarantees the namespace dies with the wrapper — no orphaned sandbox.
 
@@ -205,14 +205,21 @@ File-tool calls bypass bwrap → **Gateway path policy**, returning `"file not e
 
 Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 
-| Setting | Meaning | Default |
+| Setting | Key | Default |
 |---|---|---|
-| `sandbox.backend` | `"sandcastle"` (alias `"bwrap"` accepted, deprecated, removed in 1.0) | `"sandcastle"` |
-| `sandbox.mode` | `off` / `non-main` / `all` | `off` |
-| `sandbox.scope` | `agent` / `session` / `shared` | `agent` |
-| `sandbox.workspaceAccess` | `none` / `ro` / `rw` | `none` |
-| `sandbox.mapDir` | glob map-rule list (merged; allow/deny/`+` force-allow) | `[]` |
-| `sandbox.env` | env map (deny-by-default) | `{PATH,HOME,USER,LANG,LC_ALL:true}` |
+| Backend | `agents.defaults.sandbox.backend` | `"sandcastle"` (alias `"bwrap"` accepted, deprecated, removed in 1.0) |
+| Mode | `agents.defaults.sandbox.mode` | `off` |
+| Scope | `agents.defaults.sandbox.scope` | `agent` |
+| Workspace access | `agents.defaults.sandbox.workspaceAccess` | `none` |
+| Map rules | `plugins.entries."openclaw-sandcastle".config.mapDir` | `[]` |
+| Env | `plugins.entries."openclaw-sandcastle".config.env` | `{PATH,HOME,USER,LANG,LC_ALL:true}` |
+
+**Config ownership (PM decision, 2026-08-07):** OpenClaw core validates `agents.defaults.sandbox` against a **strict** schema (only `mode`, `backend`, `workspaceAccess`, `sessionToolsVisibility`, `scope`, `workspaceRoot`, `docker`, `ssh`, `browser`, `prune`). Plugin-specific keys under that block trigger `unknown configuration key` and are dropped — core builds `params.cfg` from a fixed shape with no `mapDir`/`env`. Therefore:
+
+- Core keys (`backend`, `mode`, `scope`, `workspaceAccess`) live under `agents.defaults.sandbox` (and `agents.list[].sandbox` per-agent overrides of these work normally).
+- Plugin keys (`mapDir`, `env`) live under `plugins.entries."openclaw-sandcastle".config`, validated by the plugin's `configSchema` and read via `api.pluginConfig`.
+- **Per-agent `mapDir`/`env` overrides:** core does not expose a plugin-readable per-agent config channel in v1. The code defensively reads `mapDir`/`env` from `params.cfg` via an unsafe cast (`bwrap-backend.ts`), but since core does not populate these fields, per-agent overrides are **effectively inactive**. If core later provides this channel, the merge logic in `resolveSandcastleConfig` will pick it up without further changes.
+- Consequence for security posture: a misconfigured key fails **loudly** at validation, never silently. Do not reintroduce config paths that can be accepted-but-ignored.
 
 **`scope` note (architect recommendation):** `shared` implies a *persistent* sandbox namespace, which conflicts with the ephemeral-per-exec lifecycle (§4.2). **Recommend v1 ships `agent` + `session` only; defer `shared`.** Flagged to PM (Prada) for sign-off; until confirmed, implement `agent` + `session`.
 
@@ -235,6 +242,7 @@ Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 2. **`/proc/self/environ` env re-exposure** — mitigated by env-stripping (ADR-005); revisit if a runtime still sees secrets there.
 3. **macOS backend** (ADR-004) — deferred; interface seam only.
 4. **`scope: shared`** — deferred pending PM sign-off (§8).
+5. **Per-agent `mapDir`/`env` overrides** — core does not provide a per-agent config channel in v1. Code defensively reads `params.cfg` but core doesn't populate the fields (§8). Requires core/plugin-SDK support to activate.
 
 ---
 

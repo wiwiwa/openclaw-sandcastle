@@ -40,18 +40,30 @@ Add Sandcastle to your OpenClaw config:
   agents: {
     defaults: {
       sandbox: {
-        backend: "sandcastle",
-        mapDir: [
-          "/home/user/projects/myapp:rw",  // read-write project access
-          "~/OpenClaw",                    // read-only home subdir
-          "-**/.env",                      // block .env everywhere
-          "-~/.ssh/**"                     // block SSH keys
-        ]
+        backend: "sandcastle",   // core key: select the sandcastle backend
+        mode: "non-main"         // core key: sandbox non-main sessions
+      }
+    }
+  },
+  plugins: {
+    entries: {
+      "openclaw-sandcastle": {
+        enabled: true,
+        config: {
+          mapDir: [
+            "/home/user/projects/myapp:rw",  // read-write project access
+            "~/OpenClaw",                    // read-only home subdir
+            "-**/.env",                      // block .env everywhere
+            "-~/.ssh/**"                     // block SSH keys
+          ]
+        }
       }
     }
   }
 }
 ```
+
+> **Where config lives:** core sandbox keys (`backend`, `mode`, `scope`, `workspaceAccess`) go under `agents.defaults.sandbox`. Sandcastle's own keys (`mapDir`, `env`) go under `plugins.entries."openclaw-sandcastle".config` — the namespace OpenClaw validates against the plugin's schema. Putting `mapDir`/`env` under `agents.defaults.sandbox` triggers `unknown configuration key` and they are ignored.
 
 That's it. Non-main agent sessions now run sandboxed.
 
@@ -76,6 +88,7 @@ Supports standard globs (`*`, `**`, `?`).
 ### Control Environment Variables
 
 ```json5
+// inside plugins.entries."openclaw-sandcastle".config:
 env: {
   PATH: true,               // pass through from host
   HOME: true,               // pass through

@@ -8,9 +8,9 @@
  *   4. --clearenv THEN --setenv entries (deny-by-default env, §4.3)
  *   5. --chdir workspace, then the command
  *
- * NOTE (dev pushback): §6 of Architecture.md lists `--setenv` before
- * `--clearenv`. bwrap applies options in order, so `--clearenv` placed after
- * `--setenv` would wipe the allowlisted vars. Correct order is clearenv first.
+ * §6 of Architecture.md specifies --clearenv before --setenv (deny-by-default
+ * env, ADR-005, §4.3). bwrap applies options in order, so clearenv must come
+ * first so the allowlisted vars survive.
  */
 
 import type { MountFact } from "./bind-rules.js";

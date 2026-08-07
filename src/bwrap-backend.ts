@@ -18,7 +18,7 @@ import type {
 } from "openclaw/plugin-sdk/sandbox";
 import type { SandcastlePluginConfig, SandcastleAgentConfig } from "./config.js";
 import { resolveSandcastleConfig } from "./config.js";
-import { resolveBinds, isPathDenied, expandHome } from "./bind-rules.js";
+import { resolveBinds, isPathDenied, expandHome, DEFAULT_OS_MOUNTS } from "./bind-rules.js";
 import { filterEnv } from "./env-filter.js";
 import { buildBwrapArgv } from "./argv-builder.js";
 import { resolveBwrapBinary } from "./downloader.js";
@@ -29,22 +29,10 @@ import type { MountFact } from "./bind-rules.js";
 
 /** Fail fast: verify the sandbox can actually be created (userns etc.). */
 async function probeSandbox(bwrapBin: string): Promise<void> {
-  // Minimal mounts: must include /lib64 on dynamic-link hosts so /bin/true
-  // can find its interpreter (ld-linux-x86-64.so.2).  On merged-usr systems
-  // /bin → usr/bin and /lib64 → usr/lib64, but we mount both explicitly to
-  // cover non-merged hosts as well.
-  const probeMounts = [
-    { kind: "ro-bind" as const, host: "/usr", guest: "/usr" },
-    { kind: "ro-bind" as const, host: "/lib", guest: "/lib" },
-    { kind: "ro-bind" as const, host: "/bin", guest: "/bin" },
-    { kind: "ro-bind" as const, host: "/sbin", guest: "/sbin" },
-    { kind: "dev" as const, guest: "/dev" },
-    { kind: "proc" as const, guest: "/proc" },
-    { kind: "tmpfs" as const, guest: "/tmp" },
-  ];
-  // Add /lib64 only if it exists on the host (symlink or real)
+  // Reuse the canonical default OS mounts (§4.5) — includes /lib64 when present.
+  const probeMounts: MountFact[] = [...DEFAULT_OS_MOUNTS];
   if (existsSync("/lib64")) {
-    probeMounts.splice(2, 0, { kind: "ro-bind" as const, host: "/lib64", guest: "/lib64" });
+    probeMounts.push({ kind: "ro-bind", host: "/lib64", guest: "/lib64" });
   }
   const result = await runBwrap(bwrapBin, {
     bwrapBin,

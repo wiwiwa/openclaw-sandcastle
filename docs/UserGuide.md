@@ -35,22 +35,31 @@ Or add it directly to your `openclaw.json` plugins config.
 
 ## Configuration
 
-Enable Sandcastle by setting `backend: "sandcastle"` in your sandbox config:
+Enable Sandcastle by setting `backend: "sandcastle"` in your sandbox config. **Config is split across two namespaces:** OpenClaw core keys live under `agents.defaults.sandbox`; Sandcastle's own keys (`mapDir`, `env`) live under `plugins.entries."openclaw-sandcastle".config`.
 
 ```json5
 {
   agents: {
     defaults: {
       sandbox: {
-        backend: "sandcastle",
-        mode: "non-main",        // "off" | "non-main" | "all"
-        scope: "session",        // "agent" | "session" | "shared"
-        workspaceAccess: "rw",   // "none" | "ro" | "rw"
-        mapDir: [
-          // see Map Rules section
-        ],
-        env: {
-          // see Environment Variables section
+        backend: "sandcastle",     // core key: select the backend
+        mode: "non-main",          // core key: "off" | "non-main" | "all"
+        scope: "session",          // core key: "agent" | "session"
+        workspaceAccess: "rw"      // core key: "none" | "ro" | "rw"
+      }
+    }
+  },
+  plugins: {
+    entries: {
+      "openclaw-sandcastle": {
+        enabled: true,
+        config: {
+          mapDir: [
+            // see Map Rules section
+          ],
+          env: {
+            // see Environment Variables section
+          }
         }
       }
     }
@@ -58,9 +67,13 @@ Enable Sandcastle by setting `backend: "sandcastle"` in your sandbox config:
 }
 ```
 
+> **Why the split?** OpenClaw core validates `agents.defaults.sandbox` against a **strict** schema (only `mode`, `backend`, `workspaceAccess`, `sessionToolsVisibility`, `scope`, `workspaceRoot`, `docker`, `ssh`, `browser`, `prune`). Putting `mapDir`/`env` there triggers `unknown configuration key` and the values are ignored. Sandcastle's own config namespace is validated against the plugin's published `configSchema`, so `mapDir`/`env` belong there.
+
 > **Note:** `backend: "bwrap"` is accepted as a deprecated alias for `"sandcastle"` and will be removed in 1.0.
 
 ### Per-Agent Overrides
+
+Core sandbox keys (`mode`, `scope`, `workspaceAccess`, `backend`) can be overridden per agent:
 
 ```json5
 {
@@ -68,15 +81,15 @@ Enable Sandcastle by setting `backend: "sandcastle"` in your sandbox config:
     defaults: {
       sandbox: {
         backend: "sandcastle",
-        mode: "all",
-        mapDir: ["/opt/shared:ro"]
+        mode: "all"
       }
     },
     list: [
       {
         id: "dev",
         sandbox: {
-          mapDir: ["/home/user/projects/myapp:rw"]
+          mode: "non-main",
+          workspaceAccess: "rw"
         }
       }
     ]
@@ -84,22 +97,24 @@ Enable Sandcastle by setting `backend: "sandcastle"` in your sandbox config:
 }
 ```
 
-Per-agent `mapDir` entries are **merged** with global entries. Both apply.
+**`mapDir` and `env` are global-only in v1.** They cannot be overridden per agent: OpenClaw core does not pass plugin-specific keys through the per-agent `sandbox` block, so a per-agent `sandbox.mapDir` would be rejected as an unknown key and silently ignored. Per-agent `mapDir`/`env` overrides are a **v1 non-goal** (requires a core/plugin-SDK per-agent config channel — tracked in Architecture.md §8/§10).
 
 ### Settings Reference
 
 | Setting | Key | Values | Default |
 |---|---|---|---|
-| Backend | `sandbox.backend` | `sandcastle` (`bwrap` deprecated) | `sandcastle` |
-| Mode | `sandbox.mode` | `off`, `non-main`, `all` | `off` |
-| Scope | `sandbox.scope` | `agent`, `session`, `shared` | `agent` |
-| Workspace access | `sandbox.workspaceAccess` | `none`, `ro`, `rw` | `none` |
-| Map rules | `sandbox.mapDir` | array of glob patterns | `[]` |
-| Env | `sandbox.env` | object | `{PATH, HOME, USER, LANG, LC_ALL: true}` |
+| Backend | `agents.defaults.sandbox.backend` | `sandcastle` (`bwrap` deprecated) | `sandcastle` |
+| Mode | `agents.defaults.sandbox.mode` | `off`, `non-main`, `all` | `off` |
+| Scope | `agents.defaults.sandbox.scope` | `agent`, `session` (`shared` deferred) | `agent` |
+| Workspace access | `agents.defaults.sandbox.workspaceAccess` | `none`, `ro`, `rw` | `none` |
+| Map rules | `plugins.entries."openclaw-sandcastle".config.mapDir` | array of glob patterns | `[]` |
+| Env | `plugins.entries."openclaw-sandcastle".config.env` | object | `{PATH, HOME, USER, LANG, LC_ALL: true}` |
+
+> `scope: "shared"` is **deferred** in v1 (persistent namespace conflicts with the ephemeral-per-exec lifecycle).
 
 ## Map Rules
 
-`mapDir` entries control which host paths are visible inside the sandbox.
+`mapDir` entries control which host paths are visible inside the sandbox. They are configured under `plugins.entries."openclaw-sandcastle".config.mapDir` (global-only in v1 — no per-agent overrides, see [Per-Agent Overrides](#per-agent-overrides)).
 
 ### Syntax
 
@@ -192,7 +207,7 @@ Deny rules (`-`) always win over the auto-mount.
 
 ## Environment Variables
 
-Control which environment variables reach the sandbox:
+Control which environment variables reach the sandbox, configured under `plugins.entries."openclaw-sandcastle".config.env` (global-only in v1):
 
 ```json5
 env: {
@@ -252,7 +267,7 @@ Since each `exec` call runs in an ephemeral bwrap namespace, background processe
 1. **Process survives** — use `nohup`, `setsid`, or `disown` so the child detaches from the bwrap parent
 2. **Follow-up access** — Sandcastle tracks the background PID and uses `nsenter --target <pid> --all -- <command>` to enter the original namespace for subsequent tool calls
 
-This is transparent to the agent — `exec` with `background: true` and the `process` tool work as expected.
+> **Implementation status:** helper functions exist (`buildDetachedCommand`, `buildNsenterCommand`, `PidRegistry` in `lifecycle.ts`) but are **not yet wired** into the backend exec path. Background process support is in progress for v1.
 
 ### Limitations
 
@@ -281,10 +296,32 @@ When Sandcastle needs bwrap and it's not in `PATH`:
 If bwrap cannot create namespaces (e.g. AppArmor blocking, missing capabilities):
 
 - Sandcastle emits a clear error message explaining the problem
-- Falls back to **no sandbox** rather than crashing
+- Sandcastle **fails fast** — it never silently degrades to unsandboxed execution (Architecture.md §6)
 - Run `openclaw doctor` for diagnostics
 
 ## Troubleshooting
+
+### `unknown configuration key: agents.defaults.sandbox.mapDir` (or `sandbox.env`)
+
+You put Sandcastle-specific keys inside the core `sandbox` block. OpenClaw core validates that block against a **strict** schema and rejects `mapDir`/`env` as unknown keys.
+
+**Fix:** move `mapDir`/`env` to the plugin's own config namespace:
+
+```json5
+plugins: {
+  entries: {
+    "openclaw-sandcastle": {
+      enabled: true,
+      config: {
+        mapDir: [...],
+        env: { ... }
+      }
+    }
+  }
+}
+```
+
+Only core keys (`backend`, `mode`, `scope`, `workspaceAccess`, …) belong under `agents.defaults.sandbox`.
 
 ### `bwrap: setting up uid map: Permission denied`
 
@@ -323,7 +360,7 @@ The PID may have been cleaned up or the namespace lost. Ensure the host is stabl
 ### What Sandcastle Does NOT Protect Against
 
 - **Network access** — sandboxed agents have full host network access in v1
-- **Process visibility** — `/proc` is mounted; sandboxed agents can see host process list
+- **Process visibility** — `/proc` shows only sandbox-internal processes (private PID namespace via `--unshare-pid`), but procfs itself is writable in v1
 - **Resource exhaustion** — no CPU/memory limits (bwrap doesn't enforce cgroups by default)
 - **Kernel exploits** — bwrap is not a security boundary against kernel vulnerabilities
 
