@@ -84,9 +84,10 @@ export function createBwrapSandboxBackendFactory(
     // Per-agent `sandbox.mapDir` / `sandbox.env` (Architecture.md §8).
     // Read defensively off the resolved sandbox config, merged over global
     // plugin config.
+    const cfg = params.cfg as (CreateSandboxBackendParams["cfg"] & { mapDir?: string[]; env?: Record<string, boolean | string> }) | undefined;
     const agentCfg: SandcastleAgentConfig = {
-      mapDir: (params.cfg as unknown as { mapDir?: string[] }).mapDir,
-      env: (params.cfg as unknown as { env?: Record<string, boolean | string> }).env,
+      mapDir: cfg?.mapDir,
+      env: cfg?.env,
     };
     const resolved = resolveSandcastleConfig(pluginConfig, agentCfg, {
       mode: params.cfg.mode,

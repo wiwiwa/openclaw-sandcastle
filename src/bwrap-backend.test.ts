@@ -34,7 +34,7 @@ beforeEach(() => {
   mockSpawn.mockClear();
 });
 
-const BASE_PARAMS: any = {/* eslint-disable */} as any; const _BASE_PARAMS = {
+const BASE_PARAMS = {
   sessionKey: "session:test",
   scopeKey: "test-scope",
   workspaceDir: "/home/user/ws",

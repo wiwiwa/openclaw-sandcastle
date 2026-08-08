@@ -52,6 +52,9 @@ export const DEFAULT_OS_MOUNT_GUESTS = new Set([
   "/dev",
   "/proc",
   "/tmp",
+  "/etc/resolv.conf",
+  "/etc/ssl/certs",
+  "/etc/ca-certificates",
 ]);
 
 /** Expand a leading `~` or `~/` to the home directory. */
@@ -81,7 +84,7 @@ export function isRestrictedPath(p: string, home: string): boolean {
  * @param binds       merged ParsedBind[] (global + per-agent)
  * @param workspaceDir host workspace path (mounted per workspaceAccess)
  * @param workspaceAccess none | ro | rw
- * @param opts        { home, lib64Exists, existsFn } injectable for tests
+ * @param opts        { home, lib64Exists, resolveSymlinks, statFn, resolvConfExists, sslCertsExists } injectable for tests
  */
 export function resolveBinds(
   binds: ParsedBind[],
@@ -92,6 +95,9 @@ export function resolveBinds(
     lib64Exists?: boolean;
     resolveSymlinks?: boolean | ((p: string) => string);
     statFn?: (p: string) => "file" | "dir" | "none";
+    resolvConfExists?: boolean;
+    sslCertsExists?: boolean;
+    caCertsExists?: boolean;
   } = {},
 ): BindResolution {
   const home = opts.home ?? os.homedir();
@@ -106,6 +112,41 @@ export function resolveBinds(
   const mounts: MountFact[] = [...DEFAULT_OS_MOUNTS];
   if (lib64Exists) {
     mounts.push({ kind: "ro-bind", host: "/lib64", guest: "/lib64" });
+  }
+
+  const resolvConfExists = opts.resolvConfExists ?? (() => {
+    try {
+      return existsSync("/etc/resolv.conf");
+    } catch {
+      return false;
+    }
+  })();
+  if (resolvConfExists) {
+    mounts.push({ kind: "ro-bind", host: "/etc/resolv.conf", guest: "/etc/resolv.conf" });
+  }
+
+  const sslCertsExists = opts.sslCertsExists ?? (() => {
+    try {
+      return existsSync("/etc/ssl/certs");
+    } catch {
+      return false;
+    }
+  })();
+  if (sslCertsExists) {
+    mounts.push({ kind: "ro-bind", host: "/etc/ssl/certs", guest: "/etc/ssl/certs" });
+  }
+
+  // /etc/ca-certificates holds the real CA bundle that /etc/ssl/certs/ca-certificates.crt
+  // symlinks to on some distros. Mount it so the symlink resolves.
+  const caCertsExists = opts.caCertsExists ?? (() => {
+    try {
+      return existsSync("/etc/ca-certificates");
+    } catch {
+      return false;
+    }
+  })();
+  if (caCertsExists) {
+    mounts.push({ kind: "ro-bind", host: "/etc/ca-certificates", guest: "/etc/ca-certificates" });
   }
 
   const allowRules: ParsedBind[] = [];
