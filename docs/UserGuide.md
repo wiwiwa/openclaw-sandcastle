@@ -190,6 +190,8 @@ These are always mounted and cannot be removed or overridden:
 | `/usr` | read-only | bwrap `--ro-bind` |
 | `/lib` | read-only | bwrap `--ro-bind` |
 | `/lib64` | read-only | bwrap `--ro-bind` (if exists) |
+| `/etc/resolv.conf` | read-only | bwrap `--ro-bind` (if exists) |
+| `/etc/ssl/certs` | read-only | bwrap `--ro-bind` (if exists) |
 | `/bin` | read-only | bwrap `--ro-bind` |
 | `/sbin` | read-only | bwrap `--ro-bind` |
 | `/dev` | devtmpfs | bwrap `--dev /dev` |

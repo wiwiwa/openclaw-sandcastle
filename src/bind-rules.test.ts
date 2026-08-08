@@ -60,6 +60,26 @@ describe("resolveBinds", () => {
     expect(() => resolveBinds(binds("/opt/*"), "/ws", "none", { home: HOME })).toThrow(/glob/);
   });
 
+  it("mounts /etc/resolv.conf when present (DNS for network access)", () => {
+    const r = resolveBinds(binds(), "/home/user/ws", "none", { home: HOME, lib64Exists: false, resolvConfExists: true });
+    expect(r.mounts).toContainEqual({ kind: "ro-bind", host: "/etc/resolv.conf", guest: "/etc/resolv.conf" });
+  });
+
+  it("omits /etc/resolv.conf when not present on host", () => {
+    const r = resolveBinds(binds(), "/home/user/ws", "none", { home: HOME, lib64Exists: false, resolvConfExists: false });
+    expect(r.mounts.some((m) => m.guest === "/etc/resolv.conf")).toBe(false);
+  });
+
+  it("mounts /etc/ssl/certs when present (TLS CA bundle)", () => {
+    const r = resolveBinds(binds(), "/home/user/ws", "none", { home: HOME, lib64Exists: false, sslCertsExists: true });
+    expect(r.mounts).toContainEqual({ kind: "ro-bind", host: "/etc/ssl/certs", guest: "/etc/ssl/certs" });
+  });
+
+  it("omits /etc/ssl/certs when not present on host", () => {
+    const r = resolveBinds(binds(), "/home/user/ws", "none", { home: HOME, lib64Exists: false, sslCertsExists: false });
+    expect(r.mounts.some((m) => m.guest === "/etc/ssl/certs")).toBe(false);
+  });
+
   it("mounts workspace per workspaceAccess with identical host/guest path", () => {
     const r = resolveBinds(binds(), "/home/user/ws", "rw", { home: HOME });
     expect(r.mounts).toContainEqual({ kind: "bind", host: "/home/user/ws", guest: "/home/user/ws" });
