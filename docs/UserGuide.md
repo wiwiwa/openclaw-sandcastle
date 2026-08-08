@@ -116,6 +116,22 @@ Core sandbox keys (`mode`, `scope`, `workspaceAccess`, `backend`) can be overrid
 
 `mapDir` entries control which host paths are visible inside the sandbox. They are configured under `plugins.entries."openclaw-sandcastle".config.mapDir` (global-only in v1 — no per-agent overrides, see [Per-Agent Overrides](#per-agent-overrides)).
 
+### Path Resolution
+
+All paths in `mapDir` (including deny and force-allow rules) are resolved at **config load time** using these rules:
+
+1. **Relative paths are rejected.** A path like `./secrets` or `../etc` causes a config load error. Use absolute paths (`/home/user/secrets`) or `~`-prefixed paths (`~/secrets`).
+2. **`~` is expanded** to the user's home directory. `~/.env.*` becomes `/home/user/.env.*` before glob matching. This is the only shorthand accepted.
+3. **Symlinks are resolved** to their real target (`realpath`) before binding. If `/home/user/projects` is a symlink to `/data/projects`, the sandbox binds `/data/projects`. This ensures deny rules match the real path, not a symlink alias that could bypass them.
+
+### Glob Expansion Timing
+
+Glob patterns (`*`, `**`, `?`) are expanded **once, at config load time**. This is a permanent design constraint, not a limitation — reliably re-evaluating filesystem globs at runtime is infeasible.
+
+**Implication:** files created mid-session that would match a glob pattern are **not** automatically mapped or denied. For example, if you have a deny rule `-~/.env.*` and someone creates `~/.env.local` while the gateway is running, that file is not covered until the gateway restarts and globs are re-expanded.
+
+To pick up filesystem changes, **restart the gateway**.
+
 ### Syntax
 
 ```
@@ -125,7 +141,7 @@ Core sandbox keys (`mode`, `scope`, `workspaceAccess`, `backend`) can be overrid
 | Component | Values | Description |
 |---|---|---|
 | prefix | (none), `+`, `-` | `+` = force-allow restricted path, `-` = deny |
-| glob | path with `*`, `**`, `?` | Pattern to match |
+| glob | absolute or `~`-prefixed path with `*`, `**`, `?` | Pattern to match |
 | mode | `ro` (default), `rw` | Mount mode |
 
 ### Examples
@@ -139,6 +155,8 @@ mapDir: [
   "-**/.env.*",                  // deny — blocks .env.production etc.
   "-~/.ssh/**",                  // deny — blocks SSH keys
   "-~/.aws/**",                  // deny — blocks AWS credentials
+  // "./secrets",                // ❌ REJECTED — relative path
+  // "~/secrets",               // ✅ valid — ~ expanded to absolute
 ]
 ```
 

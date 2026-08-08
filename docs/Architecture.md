@@ -87,6 +87,7 @@ An ADR is recorded only when a decision has **structural consequence or irrevers
 - **Decision:** `-` (deny) rules **always** win over allow rules; applied last, after global+per-agent merge.
 - **Rationale:** Fail-closed. A global deny must block a path even if per-agent config allows it. The single most important correctness rule.
 - **Consequence:** Order: defaults → per-agent merge → apply `-` denys. Allow cannot resurrect a denied path.
+- **Scope qualifier (ADR-006):** "Deny wins" applies to the **path snapshot resolved at config load**. It is not a runtime guarantee against filesystem changes — a file that appears mid-session and matches a deny glob is not covered until restart. Deny-wins is authoritative over the snapshot, not over arbitrary runtime mutation.
 - **Env equivalent:** the same fail-closed principle applies to env — deny-by-default + empty-by-construction (see §4.3). Unlisted env vars are absent, not merely hidden.
 
 ### ADR-004 — macOS support (planned, not v1)
@@ -106,12 +107,22 @@ An ADR is recorded only when a decision has **structural consequence or irrevers
 
 ---
 
+### ADR-006 — Path resolution & glob expansion happen once, at config load
+
+- **Decision:** All `mapDir` paths (allow and deny) go through a **single path-resolution pipeline at config load time**: (1) reject relative paths (`./`, `../` → config error), (2) expand `~` to the home directory, (3) resolve symlinks to their real target via `realpath`, (4) expand globs (`*`, `**`, `?`). The resulting **path snapshot** is then compiled into bwrap mount/deny facts. Globs are **never re-evaluated at runtime**.
+- **Rationale:** Re-evaluating filesystem globs per-exec is both racy and inconsistent with the deterministic, ephemeral sandbox model. A fixed load-time snapshot makes behavior reproducible and auditable. Resolving symlinks before binding closes the bypass where a deny rule names a symlink alias but the real target is a secret path.
+- **Consequence:** Files created *after* config load that would match a deny glob are **not** covered until the gateway restarts and globs re-expand. This is a **permanent design constraint**, not a fixable limitation — restart is the operational remedy. Deny-wins (ADR-003) applies to the resolved path snapshot, not to arbitrary runtime filesystem changes.
+
+---
+
 ## 4. Functional Design (not ADRs)
 
 These are the locked functional specifications from the PM design spec.
 
 ### 4.1 Home-parent mount protection
 `~/` itself and parent dirs (`/home`, `/`) require the **`+` force-allow** prefix to mount. Subdirs (`~/projects`) mount without `+`. Prevents accidental broad mounts exposing `~/.ssh`, `~/.aws`, `~/.gnupg`.
+
+This guard operates on the **resolved** path (ADR-006): `~` is expanded and symlinks are `realpath`-resolved *before* the home-parent check, so the guard tests the real target — e.g. if `/home` itself is a symlink, the guard applies to its resolved target, not the alias.
 
 ### 4.2 Ephemeral lifecycle + background processes
 - **Ephemeral:** a **fresh bwrap instance per exec call**; no persistent sandbox. Sandbox gone when the command exits; callers own state.
@@ -135,6 +146,9 @@ Non-exec file tools are enforced by Gateway path policy returning **`"file not e
 | `/proc` | **private PID-ns** via `--proc` (ADR-005); writable procfs in v1 |
 | `/tmp` | tmpfs (`--tmpfs`) |
 
+### 4.6 Path validation
+Any `mapDir` entry that is **relative** — e.g. `./secrets` or `../etc` — is rejected at config load with an error. Only **absolute** paths or **`~`-prefixed** paths are accepted. `~` is expanded to the user's home directory before glob matching and is the only shorthand allowed. This is the first step of the single load-time path-resolution pipeline (ADR-006, §5.1).
+
 ---
 
 ## 5. Runtime Components
@@ -149,6 +163,15 @@ Non-exec file tools are enforced by Gateway path policy returning **`"file not e
 | **Auto-downloader** | Fetches `bubblewrap-static` from Alpine latest-stable to `~/.cache/openclaw/bwrap/` when `bwrap` not on PATH | → bwrap binary path |
 
 The **exec backend interface** is the seam ADR-004 will replace with a macOS (sandcastle/ES) backend. Keep the invocation builder backend-agnostic: emit "mounts / env / command" facts, let the selected backend turn them into real flags.
+
+### 5.1 Path-resolution pipeline (ADR-006)
+Every `mapDir` entry passes through an **ordered, load-time** pipeline to become a mount/deny fact. The Config resolver performs steps 1–3; the Map-rule engine performs steps 4–5:
+
+1. **Reject relative paths** — `./` or `../` → config load error (§4.6).
+2. **Expand `~`** — `~/secrets` → `<home>/secrets` (only shorthand accepted).
+3. **Resolve symlinks** — `realpath` each path so binds and deny rules reference the real target, not a symlink alias (ADR-006).
+4. **Expand globs once** — `*`/`**`/`?` evaluated against the filesystem **at config load** and frozen into a path snapshot.
+5. **Apply deny-wins** — deny facts from the snapshot override allow facts; denied paths compile to no argv and are blocked at the file-tool bridge (ADR-003, §4.4).
 
 ---
 
@@ -189,8 +212,8 @@ Notes:
 ## 7. Data Flow
 
 1. Agent issues `exec` or file-tool call for a sandboxed session (mode/scope gate).
-2. Config resolver produces merged map rules + env.
-3. **Map-rule engine** resolves allow/deny → ordered mount flags (fail-closed on deny-wins, §4.1).
+2. Config resolver merges map rules + env, then applies the load-time **path-resolution pipeline** (§5.1): reject relative paths (§4.6), expand `~`, resolve symlinks via `realpath`.
+3. **Map-rule engine** expands globs once into a frozen path snapshot and resolves allow/deny → ordered mount flags, fail-closed on deny-wins over the snapshot (ADR-003, ADR-006). Denied paths compile to no argv / file-tool ENOENT.
 4. **Env filter** produces final env map (unlisted = stripped, §4.3).
 5. **Invocation builder** assembles argv per §6.
 6. bwrap launches the sandbox; command runs inside a **private pid+mount namespace**.
@@ -211,7 +234,7 @@ Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 | Mode | `agents.defaults.sandbox.mode` | `off` |
 | Scope | `agents.defaults.sandbox.scope` | `agent` |
 | Workspace access | `agents.defaults.sandbox.workspaceAccess` | `none` |
-| Map rules | `plugins.entries."openclaw-sandcastle".config.mapDir` | `[]` |
+| Map rules | `plugins.entries."openclaw-sandcastle".config.mapDir` | `[]` (absolute or `~`-prefixed paths only; see UserGuide syntax) |
 | Env | `plugins.entries."openclaw-sandcastle".config.env` | `{PATH,HOME,USER,LANG,LC_ALL:true}` |
 
 **Config ownership (PM decision, 2026-08-07):** OpenClaw core validates `agents.defaults.sandbox` against a **strict** schema (only `mode`, `backend`, `workspaceAccess`, `sessionToolsVisibility`, `scope`, `workspaceRoot`, `docker`, `ssh`, `browser`, `prune`). Plugin-specific keys under that block trigger `unknown configuration key` and are dropped — core builds `params.cfg` from a fixed shape with no `mapDir`/`env`. Therefore:
@@ -239,10 +262,12 @@ Full user-facing detail: `docs/UserGuide.md`. Architecturally relevant:
 ## 10. Risks & Open Items
 
 1. **User-namespace availability** on host — fail fast, never silently degrade (§6).
-2. **`/proc/self/environ` env re-exposure** — mitigated by env-stripping (ADR-005); revisit if a runtime still sees secrets there.
-3. **macOS backend** (ADR-004) — deferred; interface seam only.
-4. **`scope: shared`** — deferred pending PM sign-off (§8).
-5. **Per-agent `mapDir`/`env` overrides** — core does not provide a per-agent config channel in v1. Code defensively reads `params.cfg` but core doesn't populate the fields (§8). Requires core/plugin-SDK support to activate.
+2. **Symlink TOCTOU** — a symlink target may change between `realpath` resolution (config load) and the bwrap bind; deny rules match the *resolved* path, so a post-load relink could bypass a load-time deny until restart (ADR-006).
+3. **Stale glob snapshot** — globs are expanded once at load; files created mid-session that match a deny glob are not denied until gateway restart (ADR-006). Operators must not assume runtime coverage.
+4. **`/proc/self/environ` env re-exposure** — mitigated by env-stripping (ADR-005); revisit if a runtime still sees secrets there.
+5. **macOS backend** (ADR-004) — deferred; interface seam only.
+6. **`scope: shared`** — deferred pending PM sign-off (§8).
+7. **Per-agent `mapDir`/`env` overrides** — core does not provide a per-agent config channel in v1. Code defensively reads `params.cfg` but core doesn't populate the fields (§8). Requires core/plugin-SDK support to activate.
 
 ---
 

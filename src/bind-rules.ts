@@ -12,7 +12,7 @@
 
 import os from "node:os";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import type { ParsedBind, WorkspaceAccess } from "./config.js";
 import { matchesDenyRule } from "./glob.js";
 
@@ -61,6 +61,15 @@ export function expandHome(pattern: string, home: string = os.homedir()): string
   return pattern;
 }
 
+/** Resolve symlinks; returns original if path doesn't exist (README: "symlinks are resolved to their real target before binding"). */
+function safeRealPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
 /** Restricted paths that require the `+` force-allow prefix (§4.1). */
 export function isRestrictedPath(p: string, home: string): boolean {
   return p === "/" || p === "/home" || p === home || p === path.dirname(home);
@@ -78,7 +87,7 @@ export function resolveBinds(
   binds: ParsedBind[],
   workspaceDir: string,
   workspaceAccess: WorkspaceAccess,
-  opts: { home?: string; lib64Exists?: boolean } = {},
+  opts: { home?: string; lib64Exists?: boolean; resolveSymlinks?: boolean | ((p: string) => string) } = {},
 ): BindResolution {
   const home = opts.home ?? os.homedir();
   const lib64Exists = opts.lib64Exists ?? (() => {
@@ -119,21 +128,38 @@ export function resolveBinds(
           `allow binds must be concrete paths in v1 (globs are supported for deny rules)`,
       );
     }
-    const host = expandHome(rule.pattern, home);
-    if (!path.isAbsolute(host)) {
+    const expandedHost = expandHome(rule.pattern, home);
+    if (!path.isAbsolute(expandedHost)) {
       throw new Error(`sandcastle: bind path "${rule.pattern}" must be absolute`);
     }
-    if (isRestrictedPath(host, home) && rule.prefix !== "+") {
+    // Resolve symlinks on the host path (README: "symlinks are resolved to
+    // their real target before binding"). Guest stays as the expanded path
+    // so the sandbox sees the configured path name.
+    const resolvedHost =
+      typeof opts.resolveSymlinks === "function"
+        ? opts.resolveSymlinks(expandedHost)
+        : opts.resolveSymlinks === false
+          ? expandedHost
+          : safeRealPath(expandedHost);
+    // Restricted-path check on both expanded and resolved paths (security:
+    // catch symlinks escaping to ~, /home, or /).
+    if (
+      (isRestrictedPath(expandedHost, home) || isRestrictedPath(resolvedHost, home)) &&
+      rule.prefix !== "+"
+    ) {
       throw new Error(
         `sandcastle: "${rule.pattern}" is a restricted path (home or parent); ` +
           `prefix with "+" to force-allow (Architecture.md §4.1)`,
       );
     }
     // Deny wins: skip if this path (or an ancestor) is denied.
-    if (denyRules.some((d) => matchesDenyRule(expandHome(d.pattern, home), host))) {
+    if (
+      denyRules.some((d) => matchesDenyRule(expandHome(d.pattern, home), expandedHost)) ||
+      denyRules.some((d) => matchesDenyRule(expandHome(d.pattern, home), resolvedHost))
+    ) {
       continue;
     }
-    userMounts.push({ kind: rule.mode === "rw" ? "bind" : "ro-bind", host, guest: host });
+    userMounts.push({ kind: rule.mode === "rw" ? "bind" : "ro-bind", host: resolvedHost, guest: expandedHost });
   }
 
   // Workspace mount (host path == guest path, no translation).

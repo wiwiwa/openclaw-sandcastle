@@ -71,12 +71,12 @@ describe("resolveSandcastleConfig", () => {
   });
 
   it("rejects scope shared (v1 deferral, Architecture.md §8)", () => {
-    expect(() => resolveSandcastleConfig({ scope: "shared" }, undefined, base)).toThrow(/shared/);
+    expect(() => resolveSandcastleConfig({}, undefined, { ...base, scope: "shared" as const })).toThrow(/shared/);
   });
 
-  it("per-agent sandbox config wins over global scalars", () => {
+  it("sandbox config overrides defaults for mode/workspaceAccess", () => {
     const cfg = resolveSandcastleConfig(
-      { mode: "all", workspaceAccess: "ro" },
+      {},
       undefined,
       { ...base, mode: "non-main", workspaceAccess: "rw" },
     );

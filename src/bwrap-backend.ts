@@ -102,7 +102,7 @@ export function createBwrapSandboxBackendFactory(
     const { mounts: userMounts, denied } = resolveBinds(resolved.binds, resolved.workspaceDir, resolved.workspaceAccess);
 
     // Auto-mount global node modules under ~/ (docs/UserGuide.md "Auto-Mounted").
-    const globalModules = resolveGlobalModules();
+    const globalModules = resolveGlobalModules({ existsFn: (p) => existsSync(p) });
     const autoMounts: MountFact[] = [];
     let autoNodePath: string | null = null;
     if (globalModules && globalModules.shouldMount && existsSync(globalModules.path)) {

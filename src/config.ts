@@ -1,8 +1,10 @@
 /**
  * Sandcastle plugin configuration types + resolution.
  *
- * Follows Architecture.md §4.3, §8. Config lives under the agent sandbox
- * config (`sandbox.mapDir`, `sandbox.env`) merged over global plugin config.
+ * Follows Architecture.md §4.3, §8. Plugin-specific config (`mapDir`, `env`)
+ * lives under `plugins.entries."openclaw-sandcastle".config`. Core sandbox
+ * keys (`mode`, `scope`, `workspaceAccess`, `backend`) live under
+ * `agents.defaults.sandbox` and are passed through `sandboxCfg`.
  */
 
 export type SandboxMode = "off" | "non-main" | "all";
@@ -27,12 +29,8 @@ export interface SandcastleAgentConfig {
   env?: Record<string, EnvEntry>;
 }
 
-/** Plugin-level config (global defaults). */
+/** Plugin-level config (under `plugins.entries."openclaw-sandcastle".config`). */
 export interface SandcastlePluginConfig {
-  backend?: "sandcastle" | "bwrap";
-  mode?: SandboxMode;
-  scope?: SandboxScope;
-  workspaceAccess?: WorkspaceAccess;
   mapDir?: string[];
   env?: Record<string, EnvEntry>;
 }
@@ -85,7 +83,7 @@ export function resolveSandcastleConfig(
     env[k] = v;
   }
 
-  const scope = sandboxCfg.scope ?? global.scope ?? "agent";
+  const scope = sandboxCfg.scope ?? "agent";
   if (!SCOPE_WHITELIST.includes(scope)) {
     throw new Error(
       `sandcastle: scope "${scope}" is not supported in v1 (ephemeral lifecycle). ` +
@@ -95,9 +93,9 @@ export function resolveSandcastleConfig(
 
   return {
     backend: "sandcastle",
-    mode: sandboxCfg.mode ?? global.mode ?? "off",
+    mode: sandboxCfg.mode ?? "off",
     scope,
-    workspaceAccess: sandboxCfg.workspaceAccess ?? global.workspaceAccess ?? DEFAULT_WORKSPACE_ACCESS,
+    workspaceAccess: sandboxCfg.workspaceAccess ?? DEFAULT_WORKSPACE_ACCESS,
     workspaceDir: sandboxCfg.workspaceDir,
     binds,
     env,

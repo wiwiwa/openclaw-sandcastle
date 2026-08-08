@@ -83,7 +83,9 @@ Use **map rules** to decide exactly what the sandbox can see:
 | `-/path/**` | **Deny** — block this path (always wins) |
 | `+~/path` | **Force-allow** — mount paths under home |
 
-Supports standard globs (`*`, `**`, `?`).
+Deny rules support standard globs (`*`, `**`, `?`). Allow rules require concrete paths in v1.
+
+> **Path rules:** All paths must be absolute or `~`-prefixed (relative paths are rejected at config load). `~` is expanded to the home directory; symlinks on host paths are resolved to their real target before binding (guest paths keep the configured name). Deny-rule globs are matched at runtime against path lookups.
 
 ### Control Environment Variables
 
@@ -101,7 +103,7 @@ Unlisted variables are stripped automatically. Only `PATH`, `HOME`, `USER`, `LAN
 
 ### Background Processes
 
-Background processes work normally — they survive after the command exits and can be interacted with in subsequent calls.
+Background process support is in progress for v1 — helper functions exist (`nohup`/`setsid` + PID tracking + `nsenter`) but are not yet wired into the exec path. See [Architecture.md §4.2](docs/Architecture.md) for status.
 
 ---
 

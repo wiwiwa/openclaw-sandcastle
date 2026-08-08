@@ -46,6 +46,8 @@ export function resolveGlobalModules(
     nodeVersion?: string;
     /** Injectable resolver; defaults to the real require.resolve attempt. */
     tryResolveOpenclaw?: () => string | null;
+    /** Injectable existence check; defaults to () => true (caller verifies before mount). */
+    existsFn?: (p: string) => boolean;
   } = {},
 ): GlobalModulesResult | null {
   const home = opts.home ?? os.homedir();
@@ -67,11 +69,12 @@ export function resolveGlobalModules(
   }
 
   // 3. Common home-prefix locations.
+  const existsFn = opts.existsFn ?? (() => true);
   const candidates = buildHomeCandidates(home, opts.nodeVersion);
   for (const c of candidates) {
-    // We can't check existence without fs (keep this pure for testability);
-    // the caller (bwrap-backend) verifies existence before mounting.
-    return classify(c, home);
+    if (existsFn(c)) {
+      return classify(c, home);
+    }
   }
 
   // 4. System locations — already covered by default OS mounts.

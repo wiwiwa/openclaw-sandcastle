@@ -8,40 +8,6 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "backend": {
-        "type": "string",
-        "enum": [
-          "sandcastle",
-          "bwrap"
-        ],
-        "description": "Sandbox backend. 'sandcastle' is the canonical name; 'bwrap' is a deprecated alias (removed in 1.0)."
-      },
-      "mode": {
-        "type": "string",
-        "enum": [
-          "off",
-          "non-main",
-          "all"
-        ],
-        "description": "Which sessions get sandboxed: off, non-main, or all."
-      },
-      "scope": {
-        "type": "string",
-        "enum": [
-          "agent",
-          "session"
-        ],
-        "description": "Sandbox scope. v1 ships agent + session only (Architecture.md §8)."
-      },
-      "workspaceAccess": {
-        "type": "string",
-        "enum": [
-          "none",
-          "ro",
-          "rw"
-        ],
-        "description": "Workspace mount mode inside the sandbox."
-      },
       "mapDir": {
         "type": "array",
         "items": {
