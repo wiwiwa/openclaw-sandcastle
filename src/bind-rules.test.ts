@@ -68,6 +68,30 @@ describe("resolveBinds", () => {
     const none = resolveBinds(binds(), "/home/user/ws", "none", { home: HOME });
     expect(none.mounts.some((m) => m.guest === "/home/user/ws")).toBe(false);
   });
+
+  it("masks denied files with /dev/null instead of tmpfs (ENOTDIR fix)", () => {
+    const statFn = (p: string) =>
+      p === "/home/user/.openclaw/openclaw.json" ? ("file" as const) : ("dir" as const);
+    const r = resolveBinds(
+      binds("+~/.openclaw:rw", "-~/.openclaw/openclaw.json"),
+      "/ws", "none",
+      { home: HOME, statFn },
+    );
+    expect(r.mounts).toContainEqual({ kind: "ro-bind", host: "/dev/null", guest: "/home/user/.openclaw/openclaw.json" });
+    expect(r.mounts.some((m) => m.guest === "/home/user/.openclaw/openclaw.json" && m.kind === "tmpfs")).toBe(false);
+    expect(r.denied).toContain("/home/user/.openclaw/openclaw.json");
+  });
+
+  it("still uses tmpfs for denied directories", () => {
+    const statFn = (p: string) => ("dir" as const);
+    const r = resolveBinds(
+      binds("+~/.openclaw:rw", "-~/.openclaw/secrets"),
+      "/ws", "none",
+      { home: HOME, statFn },
+    );
+    expect(r.mounts).toContainEqual({ kind: "tmpfs", guest: "/home/user/.openclaw/secrets" });
+    expect(r.denied).toContain("/home/user/.openclaw/secrets");
+  });
 });
 
 describe("isPathDenied", () => {

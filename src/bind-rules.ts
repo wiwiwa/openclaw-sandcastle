@@ -12,7 +12,7 @@
 
 import os from "node:os";
 import path from "node:path";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import type { ParsedBind, WorkspaceAccess } from "./config.js";
 import { matchesDenyRule } from "./glob.js";
 
@@ -87,7 +87,12 @@ export function resolveBinds(
   binds: ParsedBind[],
   workspaceDir: string,
   workspaceAccess: WorkspaceAccess,
-  opts: { home?: string; lib64Exists?: boolean; resolveSymlinks?: boolean | ((p: string) => string) } = {},
+  opts: {
+    home?: string;
+    lib64Exists?: boolean;
+    resolveSymlinks?: boolean | ((p: string) => string);
+    statFn?: (p: string) => "file" | "dir" | "none";
+  } = {},
 ): BindResolution {
   const home = opts.home ?? os.homedir();
   const lib64Exists = opts.lib64Exists ?? (() => {
@@ -186,7 +191,22 @@ export function resolveBinds(
       (g) => g !== "/" && (p === g || p.startsWith(g.endsWith("/") ? g : g + "/")),
     );
     if (underMounted && !DEFAULT_OS_MOUNT_GUESTS.has(p)) {
-      mounts.push({ kind: "tmpfs", guest: p });
+      // bwrap --tmpfs calls mkdir at the guest path, which fails with ENOTDIR
+      // when the host path is a regular file. Mask files with /dev/null instead.
+      const statResult = opts.statFn
+        ? opts.statFn(p)
+        : (() => {
+            try {
+              return statSync(p).isFile() ? ("file" as const) : ("dir" as const);
+            } catch {
+              return ("none" as const);
+            }
+          })();
+      if (statResult === "file") {
+        mounts.push({ kind: "ro-bind", host: "/dev/null", guest: p });
+      } else {
+        mounts.push({ kind: "tmpfs", guest: p });
+      }
       denied.push(p);
     }
   }
